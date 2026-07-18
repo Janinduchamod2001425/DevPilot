@@ -1,0 +1,27 @@
+{
+  "name": "@devpilot/database",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src --max-warnings=0",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:studio": "prisma studio"
+  },
+  "dependencies": {
+    "@prisma/client": "latest"
+  },
+  "devDependencies": {
+    "@eslint/js": "latest",
+    "@types/node": "latest",
+    "dotenv": "latest",
+    "eslint": "latest",
+    "prisma": "latest",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "latest"
+  }
+}

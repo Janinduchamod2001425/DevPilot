@@ -1,0 +1,75 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/client"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum DeploymentStatus {
+  QUEUED
+  CLONING
+  ANALYZING
+  BUILDING
+  STARTING
+  HEALTH_CHECKING
+  READY
+  FAILED
+  CANCELLED
+  STOPPED
+  ROLLED_BACK
+}
+
+model User {
+  id           String    @id @default(cuid())
+  githubId     String    @unique
+  username     String
+  displayName  String?
+  avatarUrl    String?
+  projects     Project[]
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+}
+
+model Project {
+  id              String       @id @default(cuid())
+  name            String
+  slug            String       @unique
+  repositoryOwner String
+  repositoryName  String
+  repositoryUrl   String
+  productionBranch String      @default("main")
+  userId          String
+  user            User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deployments     Deployment[]
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  @@unique([userId, repositoryOwner, repositoryName])
+  @@index([userId])
+}
+
+model Deployment {
+  id            String           @id @default(cuid())
+  projectId     String
+  project       Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  status        DeploymentStatus @default(QUEUED)
+  branch        String
+  commitSha     String?
+  commitMessage String?
+  imageTag      String?
+  containerId   String?
+  assignedPort  Int?
+  liveUrl       String?
+  errorCode     String?
+  errorMessage  String?
+  queuedAt      DateTime         @default(now())
+  startedAt     DateTime?
+  finishedAt    DateTime?
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  @@index([projectId, createdAt])
+  @@index([status])
+}

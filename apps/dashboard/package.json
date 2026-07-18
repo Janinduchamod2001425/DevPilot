@@ -1,0 +1,24 @@
+{
+  "name": "@devpilot/dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "nuxt dev --port 3000",
+    "build": "nuxt build",
+    "typecheck": "nuxt typecheck",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "@nuxtjs/tailwindcss": "latest",
+    "nuxt": "latest",
+    "vue": "latest",
+    "vue-router": "latest"
+  },
+  "devDependencies": {
+    "@nuxt/eslint": "latest",
+    "eslint": "latest",
+    "typescript": "^5.9.3",
+    "vue-tsc": "latest"
+  }
+}

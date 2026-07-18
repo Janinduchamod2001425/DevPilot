@@ -1,0 +1,14 @@
+{
+  "name": "devpilot",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@11.7.0",
+  "scripts": {
+    "dev": "pnpm --parallel --filter @devpilot/dashboard --filter @devpilot/api --filter @devpilot/worker dev",
+    "build": "pnpm -r build",
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck",
+    "infra:up": "docker compose up -d postgres redis",
+    "infra:down": "docker compose down"
+  }
+}

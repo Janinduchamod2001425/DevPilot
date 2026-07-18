@@ -1,0 +1,26 @@
+{
+  "name": "@devpilot/worker",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "nest start --watch",
+    "build": "nest build",
+    "start": "node dist/main.js",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src --max-warnings=0"
+  },
+  "dependencies": {
+    "@nestjs/common": "latest",
+    "@nestjs/core": "latest",
+    "reflect-metadata": "latest",
+    "rxjs": "latest"
+  },
+  "devDependencies": {
+    "@eslint/js": "latest",
+    "@nestjs/cli": "latest",
+    "@types/node": "latest",
+    "eslint": "latest",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "latest"
+  }
+}
