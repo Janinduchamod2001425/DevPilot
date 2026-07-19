@@ -1,10 +1,15 @@
-import { Logger, Module, OnModuleInit } from "@nestjs/common";
+import { Module } from "@nestjs/common";
+import { ConfigModule } from "@nestjs/config";
+import { DeploymentWorkerModule } from "./deployment/deployment-worker.module.js";
 
-@Module({})
-export class WorkerModule implements OnModuleInit {
-  private readonly logger = new Logger(WorkerModule.name);
+@Module({
+  imports: [
+    ConfigModule.forRoot({
+      isGlobal: true,
+      envFilePath: ["../../.env", ".env"],
+    }),
 
-  onModuleInit(): void {
-    this.logger.log("Deployment worker is ready");
-  }
-}
+    DeploymentWorkerModule,
+  ],
+})
+export class WorkerModule {}
