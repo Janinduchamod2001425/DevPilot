@@ -2,6 +2,7 @@
   "name": "@devpilot/api",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "nest start --watch",
     "build": "nest build",
@@ -10,7 +11,9 @@
     "lint": "eslint src --max-warnings=0"
   },
   "dependencies": {
+    "@devpilot/database": "workspace:*",
     "@nestjs/common": "latest",
+    "@nestjs/config": "^4.0.4",
     "@nestjs/core": "latest",
     "@nestjs/platform-express": "latest",
     "reflect-metadata": "latest",

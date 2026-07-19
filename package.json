@@ -4,7 +4,8 @@
   "private": true,
   "packageManager": "pnpm@11.7.0",
   "scripts": {
-    "dev": "pnpm --parallel --filter @devpilot/dashboard --filter @devpilot/api --filter @devpilot/worker dev",
+    "predev": "pnpm --filter @devpilot/database build",
+    "dev": "pnpm --parallel --filter @devpilot/dashboard --filter @devpilot/api --filter @devpilot/worker --filter @devpilot/database dev",
     "build": "pnpm -r build",
     "lint": "pnpm -r lint",
     "typecheck": "pnpm -r typecheck",

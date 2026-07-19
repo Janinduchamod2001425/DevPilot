@@ -10,3 +10,9 @@ coverage/
 *.log
 .DS_Store
 devpilot-data/
+
+# IDE
+.idea/
+
+# Prisma-generated client
+packages/database/generated/
