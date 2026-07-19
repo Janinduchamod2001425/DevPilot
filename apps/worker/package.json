@@ -2,6 +2,7 @@
   "name": "@devpilot/worker",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "nest start --watch",
     "build": "nest build",
@@ -10,8 +11,11 @@
     "lint": "eslint src --max-warnings=0"
   },
   "dependencies": {
+    "@devpilot/shared-types": "workspace:*",
     "@nestjs/common": "latest",
+    "@nestjs/config": "^4.0.4",
     "@nestjs/core": "latest",
+    "bullmq": "^5.80.7",
     "reflect-metadata": "latest",
     "rxjs": "latest"
   },
