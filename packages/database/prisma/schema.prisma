@@ -101,6 +101,8 @@ model DeploymentAnalysis {
   rootDirectory   String  @default(".")
   warnings        Json
 
+  discoveredApplications Json?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
