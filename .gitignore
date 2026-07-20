@@ -16,3 +16,6 @@ devpilot-data/
 
 # Prisma-generated client
 packages/database/generated/
+
+# Temporary deployment workspaces
+.devpilot/
