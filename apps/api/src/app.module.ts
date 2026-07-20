@@ -3,7 +3,7 @@ import { HealthModule } from "./health/health.module.js";
 import { DatabaseModule } from "./database/database.module.js";
 import {ConfigModule} from "@nestjs/config";
 import {RedisModule} from "./redis/redis.module.js";
-import {DeploymentQueueModule} from "./deployment-queue/deployment-queue.module.js";
+import {DeploymentsModule} from "./deployments/deployments.module.js";
 
 @Module({
   imports: [
@@ -13,7 +13,7 @@ import {DeploymentQueueModule} from "./deployment-queue/deployment-queue.module.
       }),
       DatabaseModule,
       RedisModule,
-      DeploymentQueueModule,
+      DeploymentsModule,
       HealthModule],
 })
 export class AppModule {}
