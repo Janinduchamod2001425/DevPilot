@@ -40,6 +40,8 @@ export class DeploymentQueueService
             connection: {
                 host,
                 port,
+                connectTimeout: 2000,
+                maxRetriesPerRequest: 1,
             },
 
             defaultJobOptions: {
