@@ -15,6 +15,7 @@ import {
 import { Job, Worker } from "bullmq";
 import { PrismaService } from "../database/prisma.service.js";
 import { RepositoryService } from "../repository/repository.service.js";
+import { RepositoryAnalyzerService } from "../analyzer/repository-analyzer.service.js";
 
 @Injectable()
 export class DeploymentProcessorService
@@ -32,6 +33,7 @@ export class DeploymentProcessorService
     private readonly configService: ConfigService,
     private readonly prismaService: PrismaService,
     private readonly repositoryService: RepositoryService,
+    private readonly repositoryAnalyzerService: RepositoryAnalyzerService,
   ) {}
 
   onModuleInit(): void {
@@ -86,7 +88,7 @@ export class DeploymentProcessorService
   private async processDeployment(
     job: Job<DeploymentJobData, DeploymentJobResult, DeploymentJobName>,
   ): Promise<DeploymentJobResult> {
-    const { deploymentId, repositoryUrl, branch } = job.data;
+    const { deploymentId, repositoryUrl, branch, rootDirectory } = job.data;
 
     this.logger.log(`Received deployment job ${job.id}`);
 
@@ -135,6 +137,52 @@ export class DeploymentProcessorService
           commitMessage: cloneResult.commitMessage,
         },
       });
+
+      const analysis = await this.repositoryAnalyzerService.analyze(
+        cloneResult.workspacePath,
+        rootDirectory,
+      );
+
+      await this.prismaService.client.deploymentAnalysis.upsert({
+        where: {
+          deploymentId,
+        },
+
+        create: {
+          deploymentId,
+          projectType: analysis.projectType,
+          framework: analysis.framework,
+          packageManager: analysis.packageManager,
+          installCommand: analysis.installCommand,
+          buildCommand: analysis.buildCommand,
+          startCommand: analysis.startCommand,
+          applicationPort: analysis.applicationPort,
+          hasDockerfile: analysis.hasDockerfile,
+          rootDirectory: analysis.rootDirectory,
+          warnings: analysis.warnings,
+        },
+
+        update: {
+          projectType: analysis.projectType,
+          framework: analysis.framework,
+          packageManager: analysis.packageManager,
+          installCommand: analysis.installCommand,
+          buildCommand: analysis.buildCommand,
+          startCommand: analysis.startCommand,
+          applicationPort: analysis.applicationPort,
+          hasDockerfile: analysis.hasDockerfile,
+          rootDirectory: analysis.rootDirectory,
+          warnings: analysis.warnings,
+        },
+      });
+
+      this.logger.log(`Detected framework: ${analysis.framework}`);
+
+      this.logger.log(`Package manager: ${analysis.packageManager}`);
+
+      for (const warning of analysis.warnings) {
+        this.logger.warn(warning);
+      }
 
       this.logger.log(`Deployment ${deploymentId} changed to ANALYZING`);
 
