@@ -16,6 +16,7 @@ import { Job, Worker } from "bullmq";
 import { PrismaService } from "../database/prisma.service.js";
 import { RepositoryService } from "../repository/repository.service.js";
 import { RepositoryAnalyzerService } from "../analyzer/repository-analyzer.service.js";
+import { MonorepoDiscoveryService } from "../analyzer/monorepo-discovery.service.js";
 
 @Injectable()
 export class DeploymentProcessorService
@@ -34,6 +35,7 @@ export class DeploymentProcessorService
     private readonly prismaService: PrismaService,
     private readonly repositoryService: RepositoryService,
     private readonly repositoryAnalyzerService: RepositoryAnalyzerService,
+    private readonly monorepoDiscoveryService: MonorepoDiscoveryService,
   ) {}
 
   onModuleInit(): void {
@@ -143,6 +145,9 @@ export class DeploymentProcessorService
         rootDirectory,
       );
 
+      const discoveredApplications =
+        await this.monorepoDiscoveryService.discover(cloneResult.workspacePath);
+
       await this.prismaService.client.deploymentAnalysis.upsert({
         where: {
           deploymentId,
@@ -160,6 +165,7 @@ export class DeploymentProcessorService
           hasDockerfile: analysis.hasDockerfile,
           rootDirectory: analysis.rootDirectory,
           warnings: analysis.warnings,
+          discoveredApplications,
         },
 
         update: {
@@ -173,12 +179,23 @@ export class DeploymentProcessorService
           hasDockerfile: analysis.hasDockerfile,
           rootDirectory: analysis.rootDirectory,
           warnings: analysis.warnings,
+          discoveredApplications,
         },
       });
 
       this.logger.log(`Detected framework: ${analysis.framework}`);
 
       this.logger.log(`Package manager: ${analysis.packageManager}`);
+
+      this.logger.log(
+        `Discovered ${discoveredApplications.length} deployable applications`,
+      );
+
+      for (const application of discoveredApplications) {
+        this.logger.log(
+          `${application.rootDirectory}: ${application.framework}`,
+        );
+      }
 
       for (const warning of analysis.warnings) {
         this.logger.warn(warning);
