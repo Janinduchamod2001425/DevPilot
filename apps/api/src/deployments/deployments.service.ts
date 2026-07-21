@@ -1,4 +1,5 @@
 import {
+  ConflictException,
   Injectable,
   NotFoundException,
   ServiceUnavailableException,
@@ -57,7 +58,6 @@ export class DeploymentsService {
         where: {
           id: deployment.id,
         },
-
         data: {
           status: DeploymentStatus.FAILED,
           errorCode: "QUEUE_PUBLISH_FAILED",
@@ -101,5 +101,147 @@ export class DeploymentsService {
     }
 
     return analysis;
+  }
+
+  async stop(id: string): Promise<Deployment> {
+    const deployment = await this.prismaService.client.deployment.findUnique({
+      where: {
+        id,
+      },
+    });
+
+    if (!deployment) {
+      throw new NotFoundException(`Deployment ${id} was not found`);
+    }
+
+    if (deployment.status === DeploymentStatus.STOPPED) {
+      throw new ConflictException(`Deployment ${id} is already stopped`);
+    }
+
+    if (deployment.status !== DeploymentStatus.READY) {
+      throw new ConflictException(
+        `Only READY deployments can be stopped. Current status: ${deployment.status}`,
+      );
+    }
+
+    if (!deployment.containerId) {
+      throw new ConflictException(`Deployment ${id} does not have a container`);
+    }
+
+    try {
+      await this.deploymentQueueService.addStopDeployment({
+        deploymentId: deployment.id,
+        containerId: deployment.containerId,
+        requestedAt: new Date().toISOString(),
+      });
+
+      return deployment;
+    } catch (error: unknown) {
+      throw new ServiceUnavailableException(
+        "The stop request could not be queued",
+        {
+          cause: error,
+        },
+      );
+    }
+  }
+
+  async restart(id: string): Promise<Deployment> {
+    const deployment = await this.prismaService.client.deployment.findUnique({
+      where: {
+        id,
+      },
+      include: {
+        analysis: true,
+      },
+    });
+
+    if (!deployment) {
+      throw new NotFoundException(`Deployment ${id} was not found`);
+    }
+
+    if (deployment.status !== DeploymentStatus.STOPPED) {
+      throw new ConflictException(
+        `Only STOPPED deployments can be restarted. Current status: ${deployment.status}`,
+      );
+    }
+
+    if (!deployment.imageTag) {
+      throw new ConflictException(
+        `Deployment ${id} does not have a Docker image`,
+      );
+    }
+
+    if (!deployment.analysis) {
+      throw new ConflictException(
+        `Deployment ${id} does not have deployment analysis`,
+      );
+    }
+
+    const applicationPort = deployment.analysis.applicationPort ?? 3000;
+
+    /*
+     * This conditional update prevents two simultaneous restart
+     * requests from both being accepted.
+     */
+    const transition = await this.prismaService.client.deployment.updateMany({
+      where: {
+        id,
+        status: DeploymentStatus.STOPPED,
+      },
+      data: {
+        status: DeploymentStatus.STARTING,
+        startedAt: new Date(),
+        finishedAt: null,
+        errorCode: null,
+        errorMessage: null,
+        containerId: null,
+        assignedPort: null,
+        liveUrl: null,
+      },
+    });
+
+    if (transition.count !== 1) {
+      throw new ConflictException(
+        `Deployment ${id} is already being restarted`,
+      );
+    }
+
+    try {
+      await this.deploymentQueueService.addRestartDeployment({
+        deploymentId: deployment.id,
+        imageTag: deployment.imageTag,
+        applicationPort,
+        requestedAt: new Date().toISOString(),
+      });
+    } catch (error: unknown) {
+      /*
+       * Redis could be unavailable after we changed the status.
+       * Restore STOPPED so the user can safely retry.
+       */
+      await this.prismaService.client.deployment.updateMany({
+        where: {
+          id,
+          status: DeploymentStatus.STARTING,
+          containerId: null,
+        },
+        data: {
+          status: DeploymentStatus.STOPPED,
+          errorCode: "RESTART_QUEUE_PUBLISH_FAILED",
+          errorMessage:
+            error instanceof Error ? error.message : "Unknown queue error",
+          finishedAt: new Date(),
+        },
+      });
+
+      throw new ServiceUnavailableException(
+        "The restart request could not be queued",
+        {
+          cause: error,
+        },
+      );
+    }
+
+    return this.findOne(id);
   }
 }
