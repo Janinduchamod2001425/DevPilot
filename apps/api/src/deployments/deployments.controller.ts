@@ -30,4 +30,16 @@ export class DeploymentsController {
   async findOne(@Param("id") id: string): Promise<Deployment> {
     return this.deploymentsService.findOne(id);
   }
+
+  @Post(":id/stop")
+  @HttpCode(HttpStatus.ACCEPTED)
+  async stop(@Param("id") id: string): Promise<Deployment> {
+    return this.deploymentsService.stop(id);
+  }
+
+  @Post(":id/restart")
+  @HttpCode(HttpStatus.ACCEPTED)
+  async restart(@Param("id") id: string): Promise<Deployment> {
+    return this.deploymentsService.restart(id);
+  }
 }
