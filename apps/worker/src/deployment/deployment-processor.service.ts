@@ -7,16 +7,25 @@ import {
 import { ConfigService } from "@nestjs/config";
 import { DeploymentStatus } from "@devpilot/database";
 import {
+  DEPLOYMENT_JOB_NAME,
   DEPLOYMENT_QUEUE_NAME,
+  RESTART_DEPLOYMENT_JOB_NAME,
+  STOP_DEPLOYMENT_JOB_NAME,
   type DeploymentJobData,
   type DeploymentJobName,
   type DeploymentJobResult,
+  type ProcessDeploymentJobData,
+  type RestartDeploymentJobData,
+  type StopDeploymentJobData,
 } from "@devpilot/shared-types";
 import { Job, Worker } from "bullmq";
-import { PrismaService } from "../database/prisma.service.js";
-import { RepositoryService } from "../repository/repository.service.js";
 import { RepositoryAnalyzerService } from "../analyzer/repository-analyzer.service.js";
 import { MonorepoDiscoveryService } from "../analyzer/monorepo-discovery.service.js";
+import { PrismaService } from "../database/prisma.service.js";
+import { DockerBuildService } from "../docker/docker-build.service.js";
+import { DockerContainerService } from "../docker/docker-container.service.js";
+import { DockerfileService } from "../docker/dockerfile.service.js";
+import { RepositoryService } from "../repository/repository.service.js";
 
 @Injectable()
 export class DeploymentProcessorService
@@ -36,6 +45,9 @@ export class DeploymentProcessorService
     private readonly repositoryService: RepositoryService,
     private readonly repositoryAnalyzerService: RepositoryAnalyzerService,
     private readonly monorepoDiscoveryService: MonorepoDiscoveryService,
+    private readonly dockerfileService: DockerfileService,
+    private readonly dockerBuildService: DockerBuildService,
+    private readonly dockerContainerService: DockerContainerService,
   ) {}
 
   onModuleInit(): void {
@@ -49,25 +61,22 @@ export class DeploymentProcessorService
       DeploymentJobName
     >(
       DEPLOYMENT_QUEUE_NAME,
-
       async (
         job: Job<DeploymentJobData, DeploymentJobResult, DeploymentJobName>,
       ): Promise<DeploymentJobResult> => {
-        return this.processDeployment(job);
+        return this.processJob(job);
       },
-
       {
         connection: {
           host,
           port,
         },
-
         concurrency: 2,
       },
     );
 
     this.worker.on("completed", (job) => {
-      this.logger.log(`Deployment job ${job.id} completed`);
+      this.logger.log(`Deployment job ${job.id ?? "unknown"} completed`);
     });
 
     this.worker.on("failed", (job, error) => {
@@ -87,12 +96,54 @@ export class DeploymentProcessorService
     await this.worker?.close();
   }
 
-  private async processDeployment(
+  private async processJob(
     job: Job<DeploymentJobData, DeploymentJobResult, DeploymentJobName>,
+  ): Promise<DeploymentJobResult> {
+    if (job.name === DEPLOYMENT_JOB_NAME) {
+      return this.processDeployment(
+        job as Job<
+          ProcessDeploymentJobData,
+          DeploymentJobResult,
+          typeof DEPLOYMENT_JOB_NAME
+        >,
+      );
+    }
+
+    if (job.name === STOP_DEPLOYMENT_JOB_NAME) {
+      return this.processStopDeployment(
+        job as Job<
+          StopDeploymentJobData,
+          DeploymentJobResult,
+          typeof STOP_DEPLOYMENT_JOB_NAME
+        >,
+      );
+    }
+
+    if (job.name === RESTART_DEPLOYMENT_JOB_NAME) {
+      return this.processRestartDeployment(
+        job as Job<
+          RestartDeploymentJobData,
+          DeploymentJobResult,
+          typeof RESTART_DEPLOYMENT_JOB_NAME
+        >,
+      );
+    }
+
+    throw new Error(`Unsupported deployment job: ${String(job.name)}`);
+  }
+
+  private async processDeployment(
+    job: Job<
+      ProcessDeploymentJobData,
+      DeploymentJobResult,
+      typeof DEPLOYMENT_JOB_NAME
+    >,
   ): Promise<DeploymentJobResult> {
     const { deploymentId, repositoryUrl, branch, rootDirectory } = job.data;
 
-    this.logger.log(`Received deployment job ${job.id}`);
+    this.logger.log(
+      `Received deployment job ${job.id ?? "unknown"} for deployment ${deploymentId}`,
+    );
 
     try {
       const deployment = await this.prismaService.client.deployment.findUnique({
@@ -109,7 +160,6 @@ export class DeploymentProcessorService
         where: {
           id: deploymentId,
         },
-
         data: {
           status: DeploymentStatus.CLONING,
           startedAt: deployment.startedAt ?? new Date(),
@@ -132,13 +182,14 @@ export class DeploymentProcessorService
         where: {
           id: deploymentId,
         },
-
         data: {
           status: DeploymentStatus.ANALYZING,
           commitSha: cloneResult.commitSha,
           commitMessage: cloneResult.commitMessage,
         },
       });
+
+      this.logger.log(`Deployment ${deploymentId} changed to ANALYZING`);
 
       const analysis = await this.repositoryAnalyzerService.analyze(
         cloneResult.workspacePath,
@@ -152,7 +203,6 @@ export class DeploymentProcessorService
         where: {
           deploymentId,
         },
-
         create: {
           deploymentId,
           projectType: analysis.projectType,
@@ -167,7 +217,6 @@ export class DeploymentProcessorService
           warnings: analysis.warnings,
           discoveredApplications,
         },
-
         update: {
           projectType: analysis.projectType,
           framework: analysis.framework,
@@ -182,6 +231,38 @@ export class DeploymentProcessorService
           discoveredApplications,
         },
       });
+
+      const dockerfileResult = await this.dockerfileService.prepare(
+        cloneResult.workspacePath,
+        analysis,
+      );
+
+      this.logger.log(
+        dockerfileResult.generated
+          ? `Generated Dockerfile: ${dockerfileResult.dockerfilePath}`
+          : `Using existing Dockerfile: ${dockerfileResult.dockerfilePath}`,
+      );
+
+      this.logger.log(
+        `Docker build context: ${dockerfileResult.buildContextPath}`,
+      );
+
+      const dockerBuildResult = await this.dockerBuildService.build(
+        deploymentId,
+        dockerfileResult,
+      );
+
+      this.logger.log(`Deployment image ready: ${dockerBuildResult.imageTag}`);
+
+      const applicationPort = analysis.applicationPort ?? 3000;
+
+      const containerResult = await this.dockerContainerService.start(
+        deploymentId,
+        dockerBuildResult.imageTag,
+        applicationPort,
+      );
+
+      this.logger.log(`Deployment is live at ${containerResult.liveUrl}`);
 
       this.logger.log(`Detected framework: ${analysis.framework}`);
 
@@ -201,13 +282,11 @@ export class DeploymentProcessorService
         this.logger.warn(warning);
       }
 
-      this.logger.log(`Deployment ${deploymentId} changed to ANALYZING`);
-
       this.logger.log(`Commit: ${cloneResult.commitSha}`);
 
       return {
         success: true,
-        message: `Repository cloned and ready for analysis`,
+        message: `Deployment is ready at ${containerResult.liveUrl}`,
         processedAt: new Date().toISOString(),
       };
     } catch (error: unknown) {
@@ -220,21 +299,158 @@ export class DeploymentProcessorService
     }
   }
 
+  private async processStopDeployment(
+    job: Job<
+      StopDeploymentJobData,
+      DeploymentJobResult,
+      typeof STOP_DEPLOYMENT_JOB_NAME
+    >,
+  ): Promise<DeploymentJobResult> {
+    const { deploymentId, containerId } = job.data;
+
+    this.logger.log(
+      `Received stop job ${job.id ?? "unknown"} for deployment ${deploymentId}`,
+    );
+
+    try {
+      const deployment = await this.prismaService.client.deployment.findUnique({
+        where: {
+          id: deploymentId,
+        },
+      });
+
+      if (!deployment) {
+        throw new Error(`Deployment ${deploymentId} was not found`);
+      }
+
+      if (deployment.status === DeploymentStatus.STOPPED) {
+        this.logger.log(`Deployment ${deploymentId} is already stopped`);
+
+        return {
+          success: true,
+          message: `Deployment ${deploymentId} is already stopped`,
+          processedAt: new Date().toISOString(),
+        };
+      }
+
+      await this.dockerContainerService.stop(deploymentId, containerId);
+
+      this.logger.log(`Deployment ${deploymentId} stopped successfully`);
+
+      return {
+        success: true,
+        message: `Deployment ${deploymentId} stopped successfully`,
+        processedAt: new Date().toISOString(),
+      };
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Unknown stop-deployment error";
+
+      this.logger.error(
+        `Failed to stop deployment ${deploymentId}: ${message}`,
+      );
+
+      throw error;
+    }
+  }
+
+  private async processRestartDeployment(
+    job: Job<
+      RestartDeploymentJobData,
+      DeploymentJobResult,
+      typeof RESTART_DEPLOYMENT_JOB_NAME
+    >,
+  ): Promise<DeploymentJobResult> {
+    const { deploymentId, imageTag, applicationPort } = job.data;
+
+    this.logger.log(
+      `Received restart job ${job.id ?? "unknown"} for deployment ${deploymentId}`,
+    );
+
+    try {
+      const deployment = await this.prismaService.client.deployment.findUnique({
+        where: {
+          id: deploymentId,
+        },
+      });
+
+      if (!deployment) {
+        throw new Error(`Deployment ${deploymentId} was not found`);
+      }
+
+      if (deployment.status !== DeploymentStatus.STARTING) {
+        throw new Error(
+          `Deployment ${deploymentId} cannot be restarted from status ${deployment.status}`,
+        );
+      }
+
+      if (!deployment.imageTag) {
+        throw new Error(
+          `Deployment ${deploymentId} does not have a Docker image`,
+        );
+      }
+
+      if (deployment.imageTag !== imageTag) {
+        throw new Error(
+          `Restart image does not match the stored image for deployment ${deploymentId}`,
+        );
+      }
+
+      const containerResult = await this.dockerContainerService.start(
+        deploymentId,
+        imageTag,
+        applicationPort,
+      );
+
+      this.logger.log(
+        `Deployment ${deploymentId} restarted at ${containerResult.liveUrl}`,
+      );
+
+      return {
+        success: true,
+        message: `Deployment restarted at ${containerResult.liveUrl}`,
+        processedAt: new Date().toISOString(),
+      };
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Unknown restart-deployment error";
+
+      await this.markDeploymentAsFailed(
+        deploymentId,
+        message,
+        "RESTART_FAILED",
+      );
+
+      throw error;
+    }
+  }
+
   private async markDeploymentAsFailed(
     deploymentId: string,
     message: string,
+    errorCode = "WORKER_PROCESSING_FAILED",
   ): Promise<void> {
     await this.prismaService.client.deployment.updateMany({
       where: {
         id: deploymentId,
       },
-
       data: {
         status: DeploymentStatus.FAILED,
-        errorCode: "WORKER_PROCESSING_FAILED",
+        containerId: null,
+        assignedPort: null,
+        liveUrl: null,
+        errorCode,
         errorMessage: message,
         finishedAt: new Date(),
       },
     });
+
+    this.logger.error(
+      `Deployment ${deploymentId} changed to FAILED: ${message}`,
+    );
   }
 }
