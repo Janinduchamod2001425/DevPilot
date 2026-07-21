@@ -149,7 +149,7 @@ export class RepositoryService {
       const message =
         error instanceof Error ? error.message : "Unknown Git error";
 
-      throw new Error(`Git operation failed: ${message}`);
+      throw new Error(`Git operation failed: ${message}`, { cause: error });
     }
   }
 }
