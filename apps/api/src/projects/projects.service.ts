@@ -13,6 +13,135 @@ type DiscoveredApplication = {
 export class ProjectsService {
   constructor(private readonly prismaService: PrismaService) {}
 
+  async findAll() {
+    return this.prismaService.client.project.findMany({
+      orderBy: {
+        updatedAt: "desc",
+      },
+
+      select: {
+        id: true,
+        name: true,
+        slug: true,
+        repositoryOwner: true,
+        repositoryName: true,
+        repositoryUrl: true,
+        productionBranch: true,
+        rootDirectory: true,
+        createdAt: true,
+        updatedAt: true,
+
+        deployments: {
+          orderBy: {
+            createdAt: "desc",
+          },
+
+          take: 1,
+
+          select: {
+            id: true,
+            status: true,
+            branch: true,
+            commitSha: true,
+            commitMessage: true,
+            imageTag: true,
+            containerId: true,
+            assignedPort: true,
+            liveUrl: true,
+            errorCode: true,
+            errorMessage: true,
+            queuedAt: true,
+            startedAt: true,
+            finishedAt: true,
+            createdAt: true,
+            updatedAt: true,
+          },
+        },
+
+        _count: {
+          select: {
+            deployments: true,
+          },
+        },
+      },
+    });
+  }
+
+  async findOne(projectId: string) {
+    const project = await this.prismaService.client.project.findUnique({
+      where: {
+        id: projectId,
+      },
+
+      select: {
+        id: true,
+        name: true,
+        slug: true,
+        repositoryOwner: true,
+        repositoryName: true,
+        repositoryUrl: true,
+        productionBranch: true,
+        rootDirectory: true,
+        createdAt: true,
+        updatedAt: true,
+
+        deployments: {
+          orderBy: {
+            createdAt: "desc",
+          },
+
+          take: 1,
+
+          include: {
+            analysis: true,
+          },
+        },
+
+        _count: {
+          select: {
+            deployments: true,
+          },
+        },
+      },
+    });
+
+    if (!project) {
+      throw new NotFoundException(`Project ${projectId} was not found`);
+    }
+
+    return project;
+  }
+
+  async findDeployments(projectId: string) {
+    const project = await this.prismaService.client.project.findUnique({
+      where: {
+        id: projectId,
+      },
+
+      select: {
+        id: true,
+      },
+    });
+
+    if (!project) {
+      throw new NotFoundException(`Project ${projectId} was not found`);
+    }
+
+    return this.prismaService.client.deployment.findMany({
+      where: {
+        projectId,
+      },
+
+      orderBy: {
+        createdAt: "desc",
+      },
+
+      include: {
+        analysis: true,
+      },
+    });
+  }
+
   async updateRootDirectory(projectId: string, rootDirectory: unknown) {
     if (typeof rootDirectory !== "string" || !rootDirectory.trim()) {
       throw new BadRequestException("rootDirectory must be a non-empty string");
