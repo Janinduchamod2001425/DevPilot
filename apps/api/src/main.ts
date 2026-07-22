@@ -8,15 +8,15 @@ async function bootstrap(): Promise<void> {
   app.enableShutdownHooks();
 
   app.useGlobalPipes(
-      new ValidationPipe({
-        whitelist: true,
-        transform: true,
-      }),
+    new ValidationPipe({
+      whitelist: true,
+      transform: true,
+    }),
   );
 
   app.setGlobalPrefix("api");
 
-  app.enableCors({ origin: "http://localhost:3000", credentials: true });
+  app.enableCors({ origin: "http://localhost:3001", credentials: true });
 
   const port = Number(process.env.API_PORT ?? 4000);
   await app.listen(port);
