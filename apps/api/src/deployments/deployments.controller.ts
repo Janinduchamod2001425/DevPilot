@@ -7,7 +7,11 @@ import {
   Param,
   Post,
 } from "@nestjs/common";
-import type { Deployment, DeploymentAnalysis } from "@devpilot/database";
+import type {
+  Deployment,
+  DeploymentAnalysis,
+  DeploymentLog,
+} from "@devpilot/database";
 import { CreateDeploymentDto } from "./dto/create-deployment.dto.js";
 import { DeploymentsService } from "./deployments.service.js";
 
@@ -24,6 +28,11 @@ export class DeploymentsController {
   @Get(":id/analysis")
   async findAnalysis(@Param("id") id: string): Promise<DeploymentAnalysis> {
     return this.deploymentsService.findAnalysis(id);
+  }
+
+  @Get(":id/logs")
+  async findLogs(@Param("id") id: string): Promise<DeploymentLog[]> {
+    return this.deploymentsService.findLogs(id);
   }
 
   @Get(":id")
