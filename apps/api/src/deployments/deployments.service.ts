@@ -8,6 +8,7 @@ import {
   DeploymentStatus,
   type Deployment,
   type DeploymentAnalysis,
+  type DeploymentLog,
 } from "@devpilot/database";
 import { PrismaService } from "../database/prisma.service.js";
 import { DeploymentQueueService } from "../deployment-queue/deployment-queue.service.js";
@@ -31,13 +32,28 @@ export class DeploymentsService {
       throw new NotFoundException(`Project ${dto.projectId} was not found`);
     }
 
-    const deployment = await this.prismaService.client.deployment.create({
-      data: {
-        projectId: project.id,
-        branch: project.productionBranch,
-        status: DeploymentStatus.QUEUED,
+    const deployment = await this.prismaService.client.$transaction(
+      async (prisma) => {
+        const createdDeployment = await prisma.deployment.create({
+          data: {
+            projectId: project.id,
+            branch: project.productionBranch,
+            status: DeploymentStatus.QUEUED,
+          },
+        });
+
+        await prisma.deploymentLog.create({
+          data: {
+            deploymentId: createdDeployment.id,
+            level: "INFO",
+            stage: "QUEUE",
+            message: `Deployment queued for ${project.repositoryOwner}/${project.repositoryName} on branch ${project.productionBranch}`,
+          },
+        });
+
+        return createdDeployment;
       },
-    });
+    );
 
     try {
       await this.deploymentQueueService.addDeployment({
@@ -54,17 +70,28 @@ export class DeploymentsService {
       const message =
         error instanceof Error ? error.message : "Unknown queue error";
 
-      await this.prismaService.client.deployment.update({
-        where: {
-          id: deployment.id,
-        },
-        data: {
-          status: DeploymentStatus.FAILED,
-          errorCode: "QUEUE_PUBLISH_FAILED",
-          errorMessage: message,
-          finishedAt: new Date(),
-        },
-      });
+      await this.prismaService.client.$transaction([
+        this.prismaService.client.deployment.update({
+          where: {
+            id: deployment.id,
+          },
+          data: {
+            status: DeploymentStatus.FAILED,
+            errorCode: "QUEUE_PUBLISH_FAILED",
+            errorMessage: message,
+            finishedAt: new Date(),
+          },
+        }),
+
+        this.prismaService.client.deploymentLog.create({
+          data: {
+            deploymentId: deployment.id,
+            level: "ERROR",
+            stage: "QUEUE",
+            message: `Failed to publish deployment job: ${message}`,
+          },
+        }),
+      ]);
 
       throw new ServiceUnavailableException(
         "The deployment was created, but it could not be queued",
@@ -101,6 +128,35 @@ export class DeploymentsService {
     }
 
     return analysis;
+  }
+
+  async findLogs(deploymentId: string): Promise<DeploymentLog[]> {
+    const deployment = await this.prismaService.client.deployment.findUnique({
+      where: {
+        id: deploymentId,
+      },
+      select: {
+        id: true,
+      },
+    });
+
+    if (!deployment) {
+      throw new NotFoundException(`Deployment ${deploymentId} was not found`);
+    }
+
+    return this.prismaService.client.deploymentLog.findMany({
+      where: {
+        deploymentId,
+      },
+      orderBy: [
+        {
+          createdAt: "asc",
+        },
+        {
+          id: "asc",
+        },
+      ],
+    });
   }
 
   async stop(id: string): Promise<Deployment> {
