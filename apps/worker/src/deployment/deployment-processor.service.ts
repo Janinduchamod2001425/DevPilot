@@ -5,7 +5,7 @@ import {
   OnModuleInit,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
-import { DeploymentStatus } from "@devpilot/database";
+import { DeploymentLogLevel, DeploymentStatus } from "@devpilot/database";
 import {
   DEPLOYMENT_JOB_NAME,
   DEPLOYMENT_QUEUE_NAME,
@@ -156,6 +156,12 @@ export class DeploymentProcessorService
         throw new Error(`Deployment ${deploymentId} was not found`);
       }
 
+      await this.appendDeploymentLog(
+        deploymentId,
+        "WORKER",
+        `Worker received deployment job ${job.id ?? "unknown"}`,
+      );
+
       await this.prismaService.client.deployment.update({
         where: {
           id: deploymentId,
@@ -168,6 +174,12 @@ export class DeploymentProcessorService
         },
       });
 
+      await this.appendDeploymentLog(
+        deploymentId,
+        "CLONING",
+        `Cloning ${repositoryUrl} from branch ${branch}`,
+      );
+
       this.logger.log(`Deployment ${deploymentId} changed to CLONING`);
 
       const cloneResult = await this.repositoryService.cloneRepository({
@@ -175,6 +187,12 @@ export class DeploymentProcessorService
         repositoryUrl,
         branch,
       });
+
+      await this.appendDeploymentLog(
+        deploymentId,
+        "CLONING",
+        `Repository cloned successfully at commit ${cloneResult.commitSha}`,
+      );
 
       this.logger.log(`Repository cloned into ${cloneResult.workspacePath}`);
 
@@ -189,6 +207,12 @@ export class DeploymentProcessorService
         },
       });
 
+      await this.appendDeploymentLog(
+        deploymentId,
+        "ANALYZING",
+        `Analyzing repository from root directory ${rootDirectory}`,
+      );
+
       this.logger.log(`Deployment ${deploymentId} changed to ANALYZING`);
 
       const analysis = await this.repositoryAnalyzerService.analyze(
@@ -196,8 +220,22 @@ export class DeploymentProcessorService
         rootDirectory,
       );
 
+      await this.appendDeploymentLog(
+        deploymentId,
+        "ANALYZING",
+        `Detected ${analysis.framework} project using ${analysis.packageManager}`,
+      );
+
       const discoveredApplications =
         await this.monorepoDiscoveryService.discover(cloneResult.workspacePath);
+
+      await this.appendDeploymentLog(
+        deploymentId,
+        "ANALYZING",
+        `Discovered ${discoveredApplications.length} deployable application${
+          discoveredApplications.length === 1 ? "" : "s"
+        }`,
+      );
 
       await this.prismaService.client.deploymentAnalysis.upsert({
         where: {
@@ -232,17 +270,55 @@ export class DeploymentProcessorService
         },
       });
 
+      for (const application of discoveredApplications) {
+        await this.appendDeploymentLog(
+          deploymentId,
+          "ANALYZING",
+          `Application detected at ${application.rootDirectory}: ${application.framework}`,
+        );
+      }
+
+      for (const warning of analysis.warnings) {
+        await this.appendDeploymentLog(
+          deploymentId,
+          "ANALYZING",
+          warning,
+          DeploymentLogLevel.WARN,
+        );
+
+        this.logger.warn(warning);
+      }
+
+      await this.appendDeploymentLog(
+        deploymentId,
+        "DOCKERFILE",
+        analysis.hasDockerfile
+          ? "Preparing the repository Dockerfile"
+          : "No Dockerfile detected; generating one from project analysis",
+      );
+
       const dockerfileResult = await this.dockerfileService.prepare(
         cloneResult.workspacePath,
         analysis,
       );
 
-      this.logger.log(
-        dockerfileResult.generated
-          ? `Generated Dockerfile: ${dockerfileResult.dockerfilePath}`
-          : `Using existing Dockerfile: ${dockerfileResult.dockerfilePath}`,
+      const dockerfileMessage = dockerfileResult.generated
+        ? `Generated Dockerfile: ${dockerfileResult.dockerfilePath}`
+        : `Using existing Dockerfile: ${dockerfileResult.dockerfilePath}`;
+
+      await this.appendDeploymentLog(
+        deploymentId,
+        "DOCKERFILE",
+        dockerfileMessage,
       );
 
+      await this.appendDeploymentLog(
+        deploymentId,
+        "BUILDING",
+        `Building Docker image using context ${dockerfileResult.buildContextPath}`,
+      );
+
+      this.logger.log(dockerfileMessage);
       this.logger.log(
         `Docker build context: ${dockerfileResult.buildContextPath}`,
       );
@@ -252,9 +328,27 @@ export class DeploymentProcessorService
         dockerfileResult,
       );
 
+      await this.appendDeploymentLog(
+        deploymentId,
+        "BUILDING",
+        `Docker image built successfully: ${dockerBuildResult.imageTag}`,
+      );
+
       this.logger.log(`Deployment image ready: ${dockerBuildResult.imageTag}`);
 
       const applicationPort = analysis.applicationPort ?? 3000;
+
+      await this.appendDeploymentLog(
+        deploymentId,
+        "STARTING",
+        `Starting application container on internal port ${applicationPort}`,
+      );
+
+      await this.appendDeploymentLog(
+        deploymentId,
+        "HEALTH_CHECKING",
+        "Waiting for the application to start and pass its health check",
+      );
 
       const containerResult = await this.dockerContainerService.start(
         deploymentId,
@@ -262,10 +356,15 @@ export class DeploymentProcessorService
         applicationPort,
       );
 
+      await this.appendDeploymentLog(
+        deploymentId,
+        "READY",
+        `Deployment is ready at ${containerResult.liveUrl}`,
+      );
+
       this.logger.log(`Deployment is live at ${containerResult.liveUrl}`);
 
       this.logger.log(`Detected framework: ${analysis.framework}`);
-
       this.logger.log(`Package manager: ${analysis.packageManager}`);
 
       this.logger.log(
@@ -276,10 +375,6 @@ export class DeploymentProcessorService
         this.logger.log(
           `${application.rootDirectory}: ${application.framework}`,
         );
-      }
-
-      for (const warning of analysis.warnings) {
-        this.logger.warn(warning);
       }
 
       this.logger.log(`Commit: ${cloneResult.commitSha}`);
@@ -323,7 +418,20 @@ export class DeploymentProcessorService
         throw new Error(`Deployment ${deploymentId} was not found`);
       }
 
+      await this.appendDeploymentLog(
+        deploymentId,
+        "STOPPING",
+        "Stop request received; stopping application container",
+      );
+
       if (deployment.status === DeploymentStatus.STOPPED) {
+        await this.appendDeploymentLog(
+          deploymentId,
+          "STOPPED",
+          "Deployment is already stopped",
+          DeploymentLogLevel.WARN,
+        );
+
         this.logger.log(`Deployment ${deploymentId} is already stopped`);
 
         return {
@@ -334,6 +442,12 @@ export class DeploymentProcessorService
       }
 
       await this.dockerContainerService.stop(deploymentId, containerId);
+
+      await this.appendDeploymentLog(
+        deploymentId,
+        "STOPPED",
+        "Application container stopped successfully",
+      );
 
       this.logger.log(`Deployment ${deploymentId} stopped successfully`);
 
@@ -347,6 +461,13 @@ export class DeploymentProcessorService
         error instanceof Error
           ? error.message
           : "Unknown stop-deployment error";
+
+      await this.appendDeploymentLog(
+        deploymentId,
+        "STOPPING",
+        `Failed to stop deployment: ${message}`,
+        DeploymentLogLevel.ERROR,
+      );
 
       this.logger.error(
         `Failed to stop deployment ${deploymentId}: ${message}`,
@@ -380,6 +501,12 @@ export class DeploymentProcessorService
         throw new Error(`Deployment ${deploymentId} was not found`);
       }
 
+      await this.appendDeploymentLog(
+        deploymentId,
+        "RESTARTING",
+        `Restart request received for Docker image ${imageTag}`,
+      );
+
       if (deployment.status !== DeploymentStatus.STARTING) {
         throw new Error(
           `Deployment ${deploymentId} cannot be restarted from status ${deployment.status}`,
@@ -398,10 +525,28 @@ export class DeploymentProcessorService
         );
       }
 
+      await this.appendDeploymentLog(
+        deploymentId,
+        "STARTING",
+        `Starting a new container on internal port ${applicationPort}`,
+      );
+
+      await this.appendDeploymentLog(
+        deploymentId,
+        "HEALTH_CHECKING",
+        "Waiting for the restarted application to become healthy",
+      );
+
       const containerResult = await this.dockerContainerService.start(
         deploymentId,
         imageTag,
         applicationPort,
+      );
+
+      await this.appendDeploymentLog(
+        deploymentId,
+        "READY",
+        `Deployment restarted successfully at ${containerResult.liveUrl}`,
       );
 
       this.logger.log(
@@ -429,6 +574,37 @@ export class DeploymentProcessorService
     }
   }
 
+  private async appendDeploymentLog(
+    deploymentId: string,
+    stage: string,
+    message: string,
+    level: DeploymentLogLevel = DeploymentLogLevel.INFO,
+  ): Promise<void> {
+    try {
+      await this.prismaService.client.deploymentLog.create({
+        data: {
+          deploymentId,
+          level,
+          stage,
+          message,
+        },
+      });
+    } catch (error: unknown) {
+      const logError =
+        error instanceof Error
+          ? error.message
+          : "Unknown deployment-log persistence error";
+
+      /*
+       * A logging failure should not cause an otherwise valid deployment
+       * to fail.
+       */
+      this.logger.error(
+        `Could not persist log for deployment ${deploymentId}: ${logError}`,
+      );
+    }
+  }
+
   private async markDeploymentAsFailed(
     deploymentId: string,
     message: string,
@@ -448,6 +624,13 @@ export class DeploymentProcessorService
         finishedAt: new Date(),
       },
     });
+
+    await this.appendDeploymentLog(
+      deploymentId,
+      "FAILED",
+      message,
+      DeploymentLogLevel.ERROR,
+    );
 
     this.logger.error(
       `Deployment ${deploymentId} changed to FAILED: ${message}`,
