@@ -1,5 +1,11 @@
 <script lang="ts" setup>
-import type { Deployment, DeploymentStatus, Project } from "~/types/api";
+import type {
+  Deployment,
+  DeploymentLog,
+  DeploymentLogLevel,
+  DeploymentStatus,
+  Project,
+} from "~/types/api";
 
 const route = useRoute();
 const api = useDevPilotApi();
@@ -14,7 +20,15 @@ const refreshing = ref(false);
 const actionLoading = ref<"deploy" | "stop" | "restart" | null>(null);
 const errorMessage = ref("");
 
+const selectedDeploymentId = ref<string | null>(null);
+const deploymentLogs = ref<DeploymentLog[]>([]);
+const logsLoading = ref(false);
+const logsRefreshing = ref(false);
+const logsErrorMessage = ref("");
+const terminalElement = ref<HTMLElement | null>(null);
+
 let pollingTimer: ReturnType<typeof setInterval> | null = null;
+let logPollingTimer: ReturnType<typeof setInterval> | null = null;
 
 const activeStatuses: DeploymentStatus[] = [
   "QUEUED",
@@ -26,6 +40,24 @@ const activeStatuses: DeploymentStatus[] = [
 ];
 
 const latestDeployment = computed(() => deployments.value[0] ?? null);
+
+const selectedDeployment = computed(() => {
+  if (!selectedDeploymentId.value) {
+    return null;
+  }
+
+  return (
+    deployments.value.find(
+      (deployment) => deployment.id === selectedDeploymentId.value,
+    ) ?? null
+  );
+});
+
+const isSelectedDeploymentActive = computed(() => {
+  const status = selectedDeployment.value?.status;
+
+  return status ? activeStatuses.includes(status) : false;
+});
 
 const isDeploymentActive = computed(() => {
   const status = latestDeployment.value?.status;
@@ -87,7 +119,21 @@ async function loadProject(showLoader = true) {
     project.value = projectResult;
     deployments.value = deploymentsResult;
 
+    if (
+      !selectedDeploymentId.value ||
+      !deployments.value.some(
+        (deployment) => deployment.id === selectedDeploymentId.value,
+      )
+    ) {
+      selectedDeploymentId.value = deployments.value[0]?.id ?? null;
+    }
+
+    if (selectedDeploymentId.value) {
+      await loadDeploymentLogs(selectedDeploymentId.value);
+    }
+
     updatePolling();
+    updateLogPolling();
   } catch (error: unknown) {
     errorMessage.value = getRequestError(
       error,
@@ -104,6 +150,7 @@ async function refreshDeployments() {
     deployments.value = await api.getProjectDeployments(projectId.value);
 
     updatePolling();
+    updateLogPolling();
   } catch (error: unknown) {
     errorMessage.value = getRequestError(
       error,
@@ -128,7 +175,13 @@ async function deployProject() {
       ...deployments.value.filter((item) => item.id !== deployment.id),
     ];
 
+    selectedDeploymentId.value = deployment.id;
+    deploymentLogs.value = [];
+
+    await loadDeploymentLogs(deployment.id);
+
     startPolling();
+    startLogPolling();
   } catch (error: unknown) {
     errorMessage.value = getRequestError(
       error,
@@ -181,6 +234,7 @@ async function restartLatestDeployment() {
 
     replaceDeployment(updatedDeployment);
     startPolling();
+    updateLogPolling();
   } catch (error: unknown) {
     errorMessage.value = getRequestError(
       error,
@@ -231,6 +285,116 @@ function updatePolling() {
   }
 }
 
+async function loadDeploymentLogs(deploymentId: string, showLoader = true) {
+  if (showLoader) {
+    logsLoading.value = true;
+  } else {
+    logsRefreshing.value = true;
+  }
+
+  logsErrorMessage.value = "";
+
+  try {
+    const logs = await api.getDeploymentLogs(deploymentId);
+
+    if (selectedDeploymentId.value !== deploymentId) {
+      return;
+    }
+
+    deploymentLogs.value = logs;
+
+    await nextTick();
+    scrollTerminalToBottom();
+  } catch (error: unknown) {
+    if (selectedDeploymentId.value === deploymentId) {
+      logsErrorMessage.value = getRequestError(
+        error,
+        "Deployment logs could not be loaded.",
+      );
+    }
+  } finally {
+    if (selectedDeploymentId.value === deploymentId) {
+      logsLoading.value = false;
+      logsRefreshing.value = false;
+    }
+  }
+}
+
+async function selectDeployment(deploymentId: string) {
+  if (
+    selectedDeploymentId.value === deploymentId &&
+    deploymentLogs.value.length
+  ) {
+    return;
+  }
+
+  stopLogPolling();
+  selectedDeploymentId.value = deploymentId;
+  deploymentLogs.value = [];
+  logsErrorMessage.value = "";
+
+  await loadDeploymentLogs(deploymentId);
+  updateLogPolling();
+}
+
+function startLogPolling() {
+  if (logPollingTimer || !selectedDeploymentId.value) {
+    return;
+  }
+
+  logPollingTimer = setInterval(() => {
+    if (selectedDeploymentId.value) {
+      void loadDeploymentLogs(selectedDeploymentId.value, false);
+    }
+  }, 2000);
+}
+
+function stopLogPolling() {
+  if (!logPollingTimer) {
+    return;
+  }
+
+  clearInterval(logPollingTimer);
+  logPollingTimer = null;
+}
+
+function updateLogPolling() {
+  if (isSelectedDeploymentActive.value) {
+    startLogPolling();
+  } else {
+    stopLogPolling();
+  }
+}
+
+function scrollTerminalToBottom() {
+  if (terminalElement.value) {
+    terminalElement.value.scrollTop = terminalElement.value.scrollHeight;
+  }
+}
+
+function formatLogTime(value: string) {
+  return new Intl.DateTimeFormat("en", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).format(new Date(value));
+}
+
+function getLogLevelClass(level: DeploymentLogLevel) {
+  switch (level) {
+    case "ERROR":
+      return "text-rose-400";
+    case "WARN":
+      return "text-amber-300";
+    case "DEBUG":
+      return "text-slate-500";
+    case "INFO":
+    default:
+      return "text-emerald-300";
+  }
+}
+
 function formatDate(value: string | null) {
   if (!value) {
     return "—";
@@ -252,6 +416,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   stopPolling();
+  stopLogPolling();
 });
 </script>
 
@@ -478,6 +643,113 @@ onBeforeUnmount(() => {
           </div>
         </section>
 
+        <section
+          v-if="selectedDeployment"
+          class="mt-8 overflow-hidden rounded-2xl border border-slate-800 bg-slate-950"
+        >
+          <div
+            class="flex flex-col gap-4 border-b border-slate-800 bg-slate-900/80 px-5 py-4 sm:flex-row sm:items-center sm:justify-between"
+          >
+            <div>
+              <div class="flex flex-wrap items-center gap-3">
+                <div class="flex gap-1.5">
+                  <span class="h-3 w-3 rounded-full bg-rose-400" />
+                  <span class="h-3 w-3 rounded-full bg-amber-400" />
+                  <span class="h-3 w-3 rounded-full bg-emerald-400" />
+                </div>
+
+                <h2 class="font-semibold text-slate-200">Deployment logs</h2>
+                <StatusBadge :status="selectedDeployment.status" />
+              </div>
+
+              <p class="mt-2 font-mono text-xs text-slate-500">
+                {{ selectedDeployment.id }}
+              </p>
+            </div>
+
+            <div class="flex items-center gap-3">
+              <span
+                v-if="isSelectedDeploymentActive"
+                class="flex items-center gap-2 text-xs text-cyan-300"
+              >
+                <span class="h-2 w-2 animate-pulse rounded-full bg-cyan-400" />
+                Live
+              </span>
+
+              <span v-else class="text-xs text-slate-500">
+                Deployment finished
+              </span>
+
+              <button
+                :disabled="logsLoading || logsRefreshing"
+                class="rounded-lg border border-slate-700 px-3 py-1.5 text-xs font-semibold text-slate-300 transition hover:border-slate-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                type="button"
+                @click="loadDeploymentLogs(selectedDeployment.id, false)"
+              >
+                {{ logsRefreshing ? "Refreshing..." : "Refresh logs" }}
+              </button>
+            </div>
+          </div>
+
+          <div
+            ref="terminalElement"
+            class="h-[460px] overflow-y-auto p-5 font-mono text-xs leading-6 sm:text-sm"
+          >
+            <div
+              v-if="logsLoading"
+              class="flex h-full items-center justify-center text-slate-500"
+            >
+              Loading deployment logs...
+            </div>
+
+            <div
+              v-else-if="logsErrorMessage"
+              class="rounded-lg border border-rose-500/30 bg-rose-500/10 p-4 text-rose-300"
+            >
+              {{ logsErrorMessage }}
+            </div>
+
+            <div
+              v-else-if="deploymentLogs.length === 0"
+              class="flex h-full items-center justify-center text-slate-500"
+            >
+              Waiting for deployment output...
+            </div>
+
+            <div v-else>
+              <div
+                v-for="log in deploymentLogs"
+                :key="log.id"
+                class="grid grid-cols-[70px_100px_minmax(0,1fr)] gap-3 border-b border-slate-900 py-1 last:border-0"
+              >
+                <span class="text-slate-600">
+                  {{ formatLogTime(log.createdAt) }}
+                </span>
+
+                <span
+                  :class="getLogLevelClass(log.level)"
+                  class="truncate font-semibold"
+                >
+                  [{{ log.stage }}]
+                </span>
+
+                <span
+                  :class="
+                    log.level === 'ERROR'
+                      ? 'text-rose-300'
+                      : log.level === 'WARN'
+                        ? 'text-amber-200'
+                        : 'text-slate-300'
+                  "
+                  class="whitespace-pre-wrap break-words"
+                >
+                  {{ log.message }}
+                </span>
+              </div>
+            </div>
+          </div>
+        </section>
+
         <section class="mt-8">
           <div class="flex items-center justify-between">
             <div>
@@ -510,7 +782,13 @@ onBeforeUnmount(() => {
             <article
               v-for="deployment in deployments"
               :key="deployment.id"
-              class="rounded-2xl border border-slate-800 bg-slate-900/60 p-5"
+              :class="
+                selectedDeploymentId === deployment.id
+                  ? 'border-cyan-500/50 bg-cyan-500/5'
+                  : 'border-slate-800 bg-slate-900/60 hover:border-slate-700'
+              "
+              class="cursor-pointer rounded-2xl border p-5 transition"
+              @click="selectDeployment(deployment.id)"
             >
               <div
                 class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between"
@@ -542,15 +820,26 @@ onBeforeUnmount(() => {
                   </p>
                 </div>
 
-                <a
-                  v-if="deployment.status === 'READY' && deployment.liveUrl"
-                  :href="deployment.liveUrl"
-                  class="shrink-0 text-sm font-semibold text-cyan-400 transition hover:text-cyan-300"
-                  rel="noopener noreferrer"
-                  target="_blank"
-                >
-                  Visit site ↗
-                </a>
+                <div class="flex shrink-0 items-center gap-4">
+                  <button
+                    class="text-sm font-semibold text-slate-400 transition hover:text-cyan-300"
+                    type="button"
+                    @click.stop="selectDeployment(deployment.id)"
+                  >
+                    View logs
+                  </button>
+
+                  <a
+                    v-if="deployment.status === 'READY' && deployment.liveUrl"
+                    :href="deployment.liveUrl"
+                    class="text-sm font-semibold text-cyan-400 transition hover:text-cyan-300"
+                    rel="noopener noreferrer"
+                    target="_blank"
+                    @click.stop
+                  >
+                    Visit site ↗
+                  </a>
+                </div>
               </div>
             </article>
           </div>

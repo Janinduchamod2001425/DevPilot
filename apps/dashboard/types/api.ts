@@ -11,6 +11,17 @@ export type DeploymentStatus =
   | "STOPPED"
   | "ROLLED_BACK";
 
+export type DeploymentLogLevel = "DEBUG" | "INFO" | "WARN" | "ERROR";
+
+export interface DeploymentLog {
+  id: string;
+  deploymentId: string;
+  level: DeploymentLogLevel;
+  stage: string;
+  message: string;
+  createdAt: string;
+}
+
 export interface Deployment {
   id: string;
   projectId?: string;

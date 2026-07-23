@@ -1,4 +1,9 @@
-import type { Deployment, HealthResponse, Project } from "~/types/api";
+import type {
+  Deployment,
+  DeploymentLog,
+  HealthResponse,
+  Project,
+} from "~/types/api";
 
 export function useDevPilotApi() {
   const config = useRuntimeConfig();
@@ -53,12 +58,19 @@ export function useDevPilotApi() {
     );
   }
 
+  function getDeploymentLogs(deploymentId: string) {
+    return $fetch<DeploymentLog[]>(
+      `${apiBaseUrl}/deployments/${deploymentId}/logs`,
+    );
+  }
+
   return {
     getHealth,
     getProjects,
     getProject,
     getProjectDeployments,
     getDeployment,
+    getDeploymentLogs,
     createDeployment,
     stopDeployment,
     restartDeployment,
