@@ -12,6 +12,13 @@ export type DockerBuildResult = {
 const DOCKER_BUILD_TIMEOUT_MS = 15 * 60 * 1000;
 const MAX_LOG_MESSAGE_LENGTH = 10_000;
 
+const ANSI_ESCAPE_CHARACTER = String.fromCharCode(27);
+
+const ANSI_ESCAPE_SEQUENCE_PATTERN = new RegExp(
+  `${ANSI_ESCAPE_CHARACTER}\\[[0-?]*[ -/]*[@-~]`,
+  "g",
+);
+
 @Injectable()
 export class DockerBuildService {
   private readonly logger = new Logger(DockerBuildService.name);
@@ -199,7 +206,7 @@ export class DockerBuildService {
     level: DeploymentLogLevel = DeploymentLogLevel.INFO,
   ): Promise<void> {
     const normalizedMessage = message
-      .replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, "")
+      .replace(ANSI_ESCAPE_SEQUENCE_PATTERN, "")
       .trim()
       .slice(0, MAX_LOG_MESSAGE_LENGTH);
 
@@ -217,16 +224,13 @@ export class DockerBuildService {
         },
       });
     } catch (error: unknown) {
-      const message =
+      const errorMessage =
         error instanceof Error
           ? error.message
           : "Unknown deployment-log persistence error";
 
-      /*
-       * Log persistence must not terminate the Docker build.
-       */
       this.logger.error(
-        `Could not persist Docker output for deployment ${deploymentId}: ${message}`,
+        `Could not persist Docker output for deployment ${deploymentId}: ${errorMessage}`,
       );
     }
   }
