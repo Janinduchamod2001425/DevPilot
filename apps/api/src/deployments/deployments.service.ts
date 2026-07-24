@@ -216,15 +216,20 @@ export class DeploymentsService {
       throw new NotFoundException(`Deployment ${id} was not found`);
     }
 
-    if (deployment.status !== DeploymentStatus.STOPPED) {
+    const restartableStatuses: DeploymentStatus[] = [
+      DeploymentStatus.STOPPED,
+      DeploymentStatus.FAILED,
+    ];
+
+    if (!restartableStatuses.includes(deployment.status)) {
       throw new ConflictException(
-        `Only STOPPED deployments can be restarted. Current status: ${deployment.status}`,
+        `Only STOPPED or FAILED deployments can be restarted. Current status: ${deployment.status}`,
       );
     }
 
     if (!deployment.imageTag) {
       throw new ConflictException(
-        `Deployment ${id} does not have a Docker image`,
+        `Deployment ${id} does not have a reusable Docker image. Create a new deployment instead.`,
       );
     }
 
@@ -234,16 +239,17 @@ export class DeploymentsService {
       );
     }
 
+    const previousStatus = deployment.status;
     const applicationPort = deployment.analysis.applicationPort ?? 3000;
 
     /*
-     * This conditional update prevents two simultaneous restart
-     * requests from both being accepted.
+     * The conditional update ensures that simultaneous restart requests
+     * cannot both be accepted.
      */
     const transition = await this.prismaService.client.deployment.updateMany({
       where: {
         id,
-        status: DeploymentStatus.STOPPED,
+        status: previousStatus,
       },
       data: {
         status: DeploymentStatus.STARTING,
@@ -271,24 +277,37 @@ export class DeploymentsService {
         requestedAt: new Date().toISOString(),
       });
     } catch (error: unknown) {
+      const message =
+        error instanceof Error ? error.message : "Unknown queue error";
+
       /*
-       * Redis could be unavailable after we changed the status.
-       * Restore STOPPED so the user can safely retry.
+       * Restore the deployment's previous status when Redis cannot
+       * accept the restart job.
        */
-      await this.prismaService.client.deployment.updateMany({
-        where: {
-          id,
-          status: DeploymentStatus.STARTING,
-          containerId: null,
-        },
-        data: {
-          status: DeploymentStatus.STOPPED,
-          errorCode: "RESTART_QUEUE_PUBLISH_FAILED",
-          errorMessage:
-            error instanceof Error ? error.message : "Unknown queue error",
-          finishedAt: new Date(),
-        },
-      });
+      await this.prismaService.client.$transaction([
+        this.prismaService.client.deployment.updateMany({
+          where: {
+            id,
+            status: DeploymentStatus.STARTING,
+            containerId: null,
+          },
+          data: {
+            status: previousStatus,
+            errorCode: "RESTART_QUEUE_PUBLISH_FAILED",
+            errorMessage: message,
+            finishedAt: new Date(),
+          },
+        }),
+
+        this.prismaService.client.deploymentLog.create({
+          data: {
+            deploymentId: id,
+            level: "ERROR",
+            stage: "RESTART",
+            message: `Failed to publish restart job: ${message}`,
+          },
+        }),
+      ]);
 
       throw new ServiceUnavailableException(
         "The restart request could not be queued",
@@ -297,6 +316,15 @@ export class DeploymentsService {
         },
       );
     }
+
+    await this.prismaService.client.deploymentLog.create({
+      data: {
+        deploymentId: id,
+        level: "INFO",
+        stage: "RESTART",
+        message: `Restart requested from ${previousStatus} using image ${deployment.imageTag}`,
+      },
+    });
 
     return this.findOne(id);
   }
