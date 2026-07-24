@@ -12,6 +12,12 @@ export type DockerContainerResult = {
   liveUrl: string;
 };
 
+export type DockerContainerState = {
+  exists: boolean;
+  running: boolean;
+  assignedPort: number | null;
+};
+
 @Injectable()
 export class DockerContainerService {
   private readonly logger = new Logger(DockerContainerService.name);
@@ -24,6 +30,12 @@ export class DockerContainerService {
     applicationPort: number,
   ): Promise<DockerContainerResult> {
     const containerName = this.createContainerName(deploymentId);
+
+    /*
+     * A failed deployment may leave behind a stopped container with this
+     * deterministic name. Remove only stopped orphaned containers.
+     */
+    await this.prepareContainerName(containerName);
 
     await this.prismaService.client.deployment.update({
       where: {
@@ -39,10 +51,14 @@ export class DockerContainerService {
 
     this.logger.log(`Deployment ${deploymentId} changed to STARTING`);
 
+    let createdContainerId: string | null = null;
+
     try {
-      const containerId = await this.runDocker([
+      createdContainerId = await this.runDocker([
         "run",
         "--detach",
+        "--restart",
+        "unless-stopped",
         "--name",
         containerName,
         "--publish",
@@ -51,7 +67,7 @@ export class DockerContainerService {
       ]);
 
       const assignedPort = await this.getAssignedPort(
-        containerId,
+        createdContainerId,
         applicationPort,
       );
 
@@ -63,17 +79,17 @@ export class DockerContainerService {
         },
         data: {
           status: DeploymentStatus.HEALTH_CHECKING,
-          containerId,
+          containerId: createdContainerId,
           assignedPort,
           liveUrl,
         },
       });
 
-      this.logger.log(`Container started: ${containerId}`);
+      this.logger.log(`Container started: ${createdContainerId}`);
       this.logger.log(`Deployment available at ${liveUrl}`);
       this.logger.log(`Deployment ${deploymentId} changed to HEALTH_CHECKING`);
 
-      await this.waitUntilHealthy(containerId, liveUrl);
+      await this.waitUntilHealthy(createdContainerId, liveUrl);
 
       await this.prismaService.client.deployment.update({
         where: {
@@ -88,7 +104,7 @@ export class DockerContainerService {
       this.logger.log(`Deployment ${deploymentId} changed to READY`);
 
       return {
-        containerId,
+        containerId: createdContainerId,
         assignedPort,
         liveUrl,
       };
@@ -98,7 +114,13 @@ export class DockerContainerService {
           ? error.message
           : "Unknown Docker container error";
 
-      await this.removeContainer(containerName);
+      /*
+       * Remove only the container created by this start attempt. Never
+       * remove a pre-existing running container after a name conflict.
+       */
+      if (createdContainerId) {
+        await this.removeContainer(createdContainerId);
+      }
 
       throw new Error(`Docker container startup failed: ${message}`, {
         cause: error,
@@ -137,6 +159,89 @@ export class DockerContainerService {
     });
 
     this.logger.log(`Deployment ${deploymentId} changed to STOPPED`);
+  }
+
+  async inspectContainer(
+    containerId: string,
+    applicationPort: number,
+  ): Promise<DockerContainerState> {
+    const exists = await this.containerExists(containerId);
+
+    if (!exists) {
+      return {
+        exists: false,
+        running: false,
+        assignedPort: null,
+      };
+    }
+
+    const running = await this.isContainerRunning(containerId);
+
+    if (!running) {
+      return {
+        exists: true,
+        running: false,
+        assignedPort: null,
+      };
+    }
+
+    try {
+      const assignedPort = await this.getAssignedPort(
+        containerId,
+        applicationPort,
+      );
+
+      return {
+        exists: true,
+        running: true,
+        assignedPort,
+      };
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error ? error.message : "Unknown Docker port error";
+
+      this.logger.warn(
+        `Could not resolve the assigned port for container ${containerId}: ${message}`,
+      );
+
+      return {
+        exists: true,
+        running: true,
+        assignedPort: null,
+      };
+    }
+  }
+
+  private async prepareContainerName(containerName: string): Promise<void> {
+    const exists = await this.containerExists(containerName);
+
+    if (!exists) {
+      return;
+    }
+
+    const running = await this.isContainerRunning(containerName);
+
+    if (running) {
+      throw new Error(
+        `Docker container ${containerName} already exists and is running`,
+      );
+    }
+
+    this.logger.warn(
+      `Removing stopped orphaned container ${containerName} before startup`,
+    );
+
+    await this.runDocker(["rm", "--force", containerName]);
+
+    const stillExists = await this.containerExists(containerName);
+
+    if (stillExists) {
+      throw new Error(
+        `Stopped Docker container ${containerName} could not be removed`,
+      );
+    }
+
+    this.logger.log(`Removed stopped orphaned container ${containerName}`);
   }
 
   private async containerExists(containerId: string): Promise<boolean> {
