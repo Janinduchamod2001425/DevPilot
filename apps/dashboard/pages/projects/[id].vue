@@ -70,11 +70,18 @@ const canStop = computed(
     latestDeployment.value?.status === "READY" && actionLoading.value === null,
 );
 
-const canRestart = computed(
-  () =>
-    latestDeployment.value?.status === "STOPPED" &&
-    actionLoading.value === null,
-);
+const canRestart = computed(() => {
+  const deployment = latestDeployment.value;
+
+  if (!deployment || actionLoading.value !== null) {
+    return false;
+  }
+
+  return (
+    (deployment.status === "STOPPED" || deployment.status === "FAILED") &&
+    Boolean(deployment.imageTag)
+  );
+});
 
 const canDeploy = computed(
   () => !isDeploymentActive.value && actionLoading.value === null,
@@ -233,8 +240,12 @@ async function restartLatestDeployment() {
     const updatedDeployment = await api.restartDeployment(deployment.id);
 
     replaceDeployment(updatedDeployment);
+    selectedDeploymentId.value = updatedDeployment.id;
+
+    await loadDeploymentLogs(updatedDeployment.id, false);
+
     startPolling();
-    updateLogPolling();
+    startLogPolling();
   } catch (error: unknown) {
     errorMessage.value = getRequestError(
       error,
@@ -520,7 +531,10 @@ onBeforeUnmount(() => {
               </button>
 
               <button
-                v-if="latestDeployment?.status === 'STOPPED'"
+                v-if="
+                  latestDeployment?.status === 'STOPPED' ||
+                  latestDeployment?.status === 'FAILED'
+                "
                 :disabled="!canRestart"
                 class="rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-2.5 text-sm font-semibold text-emerald-300 transition hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-50"
                 type="button"
