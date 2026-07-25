@@ -5,6 +5,7 @@ import { ConfigModule } from "@nestjs/config";
 import { RedisModule } from "./redis/redis.module.js";
 import { DeploymentsModule } from "./deployments/deployments.module.js";
 import { ProjectsModule } from "./projects/projects.module.js";
+import { AuthModule } from "./auth/auth.module.js";
 
 @Module({
   imports: [
@@ -14,6 +15,7 @@ import { ProjectsModule } from "./projects/projects.module.js";
     }),
     DatabaseModule,
     RedisModule,
+    AuthModule,
     DeploymentsModule,
     HealthModule,
     ProjectsModule,
