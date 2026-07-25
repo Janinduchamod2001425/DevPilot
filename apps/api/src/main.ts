@@ -1,11 +1,15 @@
 import { ValidationPipe } from "@nestjs/common";
 import { NestFactory } from "@nestjs/core";
 import { AppModule } from "./app.module.js";
+import cookieParser from "cookie-parser";
 
 type CorsCallback = (error: Error | null, allow?: boolean) => void;
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(AppModule);
+
+  app.use(cookieParser());
+  app.enableShutdownHooks();
 
   app.enableShutdownHooks();
 
