@@ -20,6 +20,7 @@
     "bullmq": "^5.80.7",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",
+    "cookie-parser": "^1.4.7",
     "ioredis": "^5.11.1",
     "reflect-metadata": "latest",
     "rxjs": "latest"
@@ -27,6 +28,8 @@
   "devDependencies": {
     "@eslint/js": "latest",
     "@nestjs/cli": "latest",
+    "@types/cookie-parser": "^1.4.10",
+    "@types/express": "^5.0.6",
     "@types/node": "latest",
     "eslint": "latest",
     "typescript": "^5.9.3",
