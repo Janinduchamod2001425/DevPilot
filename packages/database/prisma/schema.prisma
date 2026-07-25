@@ -27,31 +27,101 @@ enum DeploymentLogLevel {
   ERROR
 }
 
+enum GitHubAccountType {
+  USER
+  ORGANIZATION
+}
+
 model User {
   id          String  @id @default(cuid())
   githubId    String  @unique
   username    String
   displayName String?
+  email       String?
   avatarUrl   String?
 
-  projects Project[]
+  projects            Project[]
+  sessions            Session[]
+  githubInstallations GitHubInstallation[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
 
-model Project {
-  id               String @id @default(cuid())
-  name             String
-  slug             String @unique
-  repositoryOwner  String
-  repositoryName   String
-  repositoryUrl    String
-  productionBranch String @default("main")
-  rootDirectory    String @default(".")
+model Session {
+  id String @id @default(cuid())
+
+  // Only the SHA-256 hash is stored in the database.
+  // The raw session token remains in the browser cookie.
+  tokenHash String @unique
 
   userId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model GitHubAuthState {
+  id String @id @default(cuid())
+
+  // Protects the GitHub authorization callback against CSRF.
+  stateHash String @unique
+
+  returnTo  String?
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([expiresAt])
+}
+
+model GitHubInstallation {
+  id String @id @default(cuid())
+
+  // GitHub numeric IDs are stored as strings to avoid
+  // BigInt serialization problems between Prisma, NestJS and Nuxt.
+  installationId String            @unique
+  accountId      String
+  accountLogin   String
+  accountType    GitHubAccountType
+  avatarUrl      String?
+
+  repositorySelection String    @default("selected")
+  suspendedAt         DateTime?
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  projects Project[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([accountLogin])
+}
+
+model Project {
+  id               String  @id @default(cuid())
+  name             String
+  slug             String  @unique
+  repositoryOwner  String
+  repositoryName   String
+  repositoryUrl    String
+  repositoryId     String?
+  productionBranch String  @default("main")
+  rootDirectory    String  @default(".")
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Nullable so existing manually created projects remain valid.
+  githubInstallationId String?
+  githubInstallation   GitHubInstallation? @relation(fields: [githubInstallationId], references: [id], onDelete: SetNull)
 
   deployments Deployment[]
 
@@ -60,6 +130,7 @@ model Project {
 
   @@unique([userId, repositoryOwner, repositoryName])
   @@index([userId])
+  @@index([githubInstallationId])
 }
 
 model Deployment {
@@ -83,10 +154,10 @@ model Deployment {
   finishedAt DateTime?
 
   analysis DeploymentAnalysis?
+  logs     DeploymentLog[]
 
-  createdAt DateTime        @default(now())
-  updatedAt DateTime        @updatedAt
-  logs      DeploymentLog[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([projectId, createdAt])
   @@index([status])
