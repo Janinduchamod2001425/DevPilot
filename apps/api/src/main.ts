@@ -11,8 +11,6 @@ async function bootstrap(): Promise<void> {
   app.use(cookieParser());
   app.enableShutdownHooks();
 
-  app.enableShutdownHooks();
-
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
