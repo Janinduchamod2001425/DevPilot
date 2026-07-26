@@ -1,7 +1,9 @@
 import type {
+  AuthResponse,
   Deployment,
   DeploymentLog,
   HealthResponse,
+  LogoutResponse,
   Project,
 } from "~/types/api";
 
@@ -13,27 +15,31 @@ export function useDevPilotApi() {
     credentials: "include",
   });
 
-  function getHealth() {
+  function getHealth(): Promise<HealthResponse> {
     return api<HealthResponse>("/health");
   }
 
-  function getProjects() {
+  function getProjects(): Promise<Project[]> {
     return api<Project[]>("/projects");
   }
 
-  function getProject(projectId: string) {
+  function getProject(projectId: string): Promise<Project> {
     return api<Project>(`/projects/${projectId}`);
   }
 
-  function getProjectDeployments(projectId: string) {
+  function getProjectDeployments(projectId: string): Promise<Deployment[]> {
     return api<Deployment[]>(`/projects/${projectId}/deployments`);
   }
 
-  function getDeployment(deploymentId: string) {
+  function getDeployment(deploymentId: string): Promise<Deployment> {
     return api<Deployment>(`/deployments/${deploymentId}`);
   }
 
-  function createDeployment(projectId: string) {
+  function getDeploymentLogs(deploymentId: string): Promise<DeploymentLog[]> {
+    return api<DeploymentLog[]>(`/deployments/${deploymentId}/logs`);
+  }
+
+  function createDeployment(projectId: string): Promise<Deployment> {
     return api<Deployment>("/deployments", {
       method: "POST",
       body: {
@@ -42,20 +48,43 @@ export function useDevPilotApi() {
     });
   }
 
-  function stopDeployment(deploymentId: string) {
+  function stopDeployment(deploymentId: string): Promise<Deployment> {
     return api<Deployment>(`/deployments/${deploymentId}/stop`, {
       method: "POST",
     });
   }
 
-  function restartDeployment(deploymentId: string) {
+  function restartDeployment(deploymentId: string): Promise<Deployment> {
     return api<Deployment>(`/deployments/${deploymentId}/restart`, {
       method: "POST",
     });
   }
 
-  function getDeploymentLogs(deploymentId: string) {
-    return api<DeploymentLog[]>(`/deployments/${deploymentId}/logs`);
+  function getCurrentUser(): Promise<AuthResponse> {
+    return api<AuthResponse>("/auth/me");
+  }
+
+  function logout(): Promise<LogoutResponse> {
+    return api<LogoutResponse>("/auth/logout", {
+      method: "POST",
+    });
+  }
+
+  function getGitHubLoginUrl(returnTo = "/"): string {
+    const safeReturnTo =
+      returnTo.startsWith("/") && !returnTo.startsWith("//") ? returnTo : "/";
+
+    return `${config.public.apiBaseUrl}/auth/github?returnTo=${encodeURIComponent(
+      safeReturnTo,
+    )}`;
+  }
+
+  function loginWithGitHub(returnTo = "/"): void {
+    if (!import.meta.client) {
+      return;
+    }
+
+    window.location.assign(getGitHubLoginUrl(returnTo));
   }
 
   return {
@@ -68,5 +97,9 @@ export function useDevPilotApi() {
     createDeployment,
     stopDeployment,
     restartDeployment,
+    getCurrentUser,
+    logout,
+    getGitHubLoginUrl,
+    loginWithGitHub,
   };
 }
