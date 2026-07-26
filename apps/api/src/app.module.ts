@@ -6,6 +6,7 @@ import { RedisModule } from "./redis/redis.module.js";
 import { DeploymentsModule } from "./deployments/deployments.module.js";
 import { ProjectsModule } from "./projects/projects.module.js";
 import { AuthModule } from "./auth/auth.module.js";
+import { GitHubModule } from "./github/github.module.js";
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { AuthModule } from "./auth/auth.module.js";
     DatabaseModule,
     RedisModule,
     AuthModule,
+    GitHubModule,
     DeploymentsModule,
     HealthModule,
     ProjectsModule,
