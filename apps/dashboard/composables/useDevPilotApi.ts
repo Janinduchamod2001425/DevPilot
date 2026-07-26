@@ -10,9 +10,67 @@ import type {
 export function useDevPilotApi() {
   const config = useRuntimeConfig();
 
+  const authUser = useState("auth-user", () => null);
+  const authInitialized = useState("auth-initialized", () => false);
+
+  /*
+   * During SSR, Nuxt calls the API from the server—not directly from
+   * the browser. Therefore, forward the browser's session cookie.
+   */
+  const requestHeaders = import.meta.server
+    ? useRequestHeaders(["cookie"])
+    : undefined;
+
   const api = $fetch.create({
     baseURL: config.public.apiBaseUrl,
     credentials: "include",
+    headers: requestHeaders,
+
+    async onResponseError({ request, response }) {
+      if (response.status !== 401) {
+        return;
+      }
+
+      const requestUrl =
+        typeof request === "string" ? request : request.toString();
+
+      /*
+       * A 401 from /auth/me is a normal logged-out response.
+       * useAuth() already handles it during initialization.
+       */
+      if (requestUrl.includes("/auth/me")) {
+        return;
+      }
+
+      authUser.value = null;
+      authInitialized.value = true;
+
+      if (!import.meta.client) {
+        return;
+      }
+
+      if (window.location.pathname === "/login") {
+        return;
+      }
+
+      const returnTo =
+        window.location.pathname +
+        window.location.search +
+        window.location.hash;
+
+      await navigateTo(
+        {
+          path: "/login",
+          query: {
+            expired: "true",
+            redirect: returnTo,
+          },
+        },
+        {
+          replace: true,
+        },
+      );
+    },
   });
 
   function getHealth(): Promise<HealthResponse> {
