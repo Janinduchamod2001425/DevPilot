@@ -63,3 +63,21 @@ export interface HealthResponse {
   status: string;
   service: string;
 }
+
+export type AuthenticatedUser = {
+  id: string;
+  githubId: string;
+  username: string;
+  displayName: string | null;
+  email: string | null;
+  avatarUrl: string | null;
+};
+
+export type AuthResponse = {
+  authenticated: boolean;
+  user: AuthenticatedUser | null;
+};
+
+export type LogoutResponse = {
+  success: true;
+};
