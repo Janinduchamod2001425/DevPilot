@@ -1,24 +1,68 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
 import { PrismaService } from "../database/prisma.service.js";
-
-type DiscoveredApplication = {
-  rootDirectory: string;
-};
+import { GitHubService } from "../github/github.service.js";
+import type { ImportProjectDto } from "./dto/import-project.dto.js";
 
 @Injectable()
 export class ProjectsService {
-  constructor(private readonly prismaService: PrismaService) {}
+  constructor(
+    private readonly prismaService: PrismaService,
+    private readonly githubService: GitHubService,
+  ) {}
 
-  async findAll() {
-    return this.prismaService.client.project.findMany({
-      orderBy: {
-        updatedAt: "desc",
+  async importProject(userId: string, dto: ImportProjectDto) {
+    const authorized = await this.githubService.findAuthorizedRepository(
+      userId,
+      dto.installationId,
+      dto.repositoryId,
+    );
+
+    const { repository, installation } = authorized;
+
+    const existingProject = await this.prismaService.client.project.findFirst({
+      where: {
+        userId,
+        repositoryOwner: repository.owner.login,
+        repositoryName: repository.name,
       },
+      select: {
+        id: true,
+        name: true,
+        slug: true,
+      },
+    });
 
+    if (existingProject) {
+      throw new ConflictException({
+        message: "This repository has already been imported",
+        project: existingProject,
+      });
+    }
+
+    const slug = await this.createUniqueSlug(
+      repository.owner.login,
+      repository.name,
+      repository.id,
+    );
+
+    return this.prismaService.client.project.create({
+      data: {
+        name: repository.name,
+        slug,
+        repositoryOwner: repository.owner.login,
+        repositoryName: repository.name,
+        repositoryUrl: repository.cloneUrl,
+        repositoryId: repository.id,
+        productionBranch: repository.defaultBranch,
+        rootDirectory: ".",
+        userId,
+        githubInstallationId: installation.id,
+      },
       select: {
         id: true,
         name: true,
@@ -26,6 +70,40 @@ export class ProjectsService {
         repositoryOwner: true,
         repositoryName: true,
         repositoryUrl: true,
+        repositoryId: true,
+        productionBranch: true,
+        rootDirectory: true,
+        createdAt: true,
+        updatedAt: true,
+
+        githubInstallation: {
+          select: {
+            id: true,
+            installationId: true,
+            accountLogin: true,
+            accountType: true,
+          },
+        },
+      },
+    });
+  }
+
+  async findAll(userId: string) {
+    return this.prismaService.client.project.findMany({
+      where: {
+        userId,
+      },
+      orderBy: {
+        updatedAt: "desc",
+      },
+      select: {
+        id: true,
+        name: true,
+        slug: true,
+        repositoryOwner: true,
+        repositoryName: true,
+        repositoryUrl: true,
+        repositoryId: true,
         productionBranch: true,
         rootDirectory: true,
         createdAt: true,
@@ -35,9 +113,7 @@ export class ProjectsService {
           orderBy: {
             createdAt: "desc",
           },
-
           take: 1,
-
           select: {
             id: true,
             status: true,
@@ -67,12 +143,12 @@ export class ProjectsService {
     });
   }
 
-  async findOne(projectId: string) {
-    const project = await this.prismaService.client.project.findUnique({
+  async findOne(userId: string, projectId: string) {
+    const project = await this.prismaService.client.project.findFirst({
       where: {
         id: projectId,
+        userId,
       },
-
       select: {
         id: true,
         name: true,
@@ -80,18 +156,26 @@ export class ProjectsService {
         repositoryOwner: true,
         repositoryName: true,
         repositoryUrl: true,
+        repositoryId: true,
         productionBranch: true,
         rootDirectory: true,
         createdAt: true,
         updatedAt: true,
 
+        githubInstallation: {
+          select: {
+            id: true,
+            installationId: true,
+            accountLogin: true,
+            accountType: true,
+          },
+        },
+
         deployments: {
           orderBy: {
             createdAt: "desc",
           },
-
           take: 1,
-
           include: {
             analysis: true,
           },
@@ -112,12 +196,12 @@ export class ProjectsService {
     return project;
   }
 
-  async findDeployments(projectId: string) {
-    const project = await this.prismaService.client.project.findUnique({
+  async findDeployments(userId: string, projectId: string) {
+    const project = await this.prismaService.client.project.findFirst({
       where: {
         id: projectId,
+        userId,
       },
-
       select: {
         id: true,
       },
@@ -131,47 +215,48 @@ export class ProjectsService {
       where: {
         projectId,
       },
-
       orderBy: {
         createdAt: "desc",
       },
-
       include: {
         analysis: true,
       },
     });
   }
 
-  async updateRootDirectory(projectId: string, rootDirectory: unknown) {
+  async updateRootDirectory(
+    userId: string,
+    projectId: string,
+    rootDirectory: unknown,
+  ) {
     if (typeof rootDirectory !== "string" || !rootDirectory.trim()) {
       throw new BadRequestException("rootDirectory must be a non-empty string");
     }
 
-    const normalizedRootDirectory = rootDirectory.trim().replaceAll("\\", "/");
+    const normalizedRootDirectory = rootDirectory
+      .trim()
+      .replaceAll("\\", "/")
+      .replace(/\/+/g, "/")
+      .replace(/\/$/, "");
 
-    const project = await this.prismaService.client.project.findUnique({
+    // Prevent absolute paths and directory traversal.
+    if (
+      normalizedRootDirectory.startsWith("/") ||
+      /^[a-zA-Z]:\//.test(normalizedRootDirectory) ||
+      normalizedRootDirectory.split("/").some((segment) => segment === "..")
+    ) {
+      throw new BadRequestException(
+        "rootDirectory must be a safe path inside the repository",
+      );
+    }
+
+    const project = await this.prismaService.client.project.findFirst({
       where: {
         id: projectId,
+        userId,
       },
-
-      include: {
-        deployments: {
-          where: {
-            analysis: {
-              isNot: null,
-            },
-          },
-
-          orderBy: {
-            createdAt: "desc",
-          },
-
-          take: 1,
-
-          include: {
-            analysis: true,
-          },
-        },
+      select: {
+        id: true,
       },
     });
 
@@ -179,37 +264,13 @@ export class ProjectsService {
       throw new NotFoundException(`Project ${projectId} was not found`);
     }
 
-    const latestAnalysis = project.deployments[0]?.analysis;
-
-    if (!latestAnalysis) {
-      throw new BadRequestException(
-        "No repository analysis is available for this project",
-      );
-    }
-
-    const discoveredApplications = this.parseDiscoveredApplications(
-      latestAnalysis.discoveredApplications,
-    );
-
-    const selectedApplication = discoveredApplications.find(
-      (application) => application.rootDirectory === normalizedRootDirectory,
-    );
-
-    if (!selectedApplication) {
-      throw new BadRequestException(
-        `Root directory "${normalizedRootDirectory}" was not found in the discovered applications`,
-      );
-    }
-
     return this.prismaService.client.project.update({
       where: {
-        id: projectId,
+        id: project.id,
       },
-
       data: {
         rootDirectory: normalizedRootDirectory,
       },
-
       select: {
         id: true,
         name: true,
@@ -223,21 +284,42 @@ export class ProjectsService {
     });
   }
 
-  private parseDiscoveredApplications(value: unknown): DiscoveredApplication[] {
-    if (!Array.isArray(value)) {
+  private async createUniqueSlug(
+    repositoryOwner: string,
+    repositoryName: string,
+    repositoryId: string,
+  ): Promise<string> {
+    const baseSlug = this.slugify(`${repositoryOwner}-${repositoryName}`);
+
+    const existingSlug = await this.prismaService.client.project.findUnique({
+      where: {
+        slug: baseSlug,
+      },
+      select: {
+        id: true,
+      },
+    });
+
+    if (!existingSlug) {
+      return baseSlug;
+    }
+
+    return `${baseSlug}-${repositoryId}`;
+  }
+
+  private slugify(value: string): string {
+    const slug = value
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+
+    if (!slug) {
       throw new BadRequestException(
-        "The latest analysis does not contain discovered applications",
+        "A valid project slug could not be generated",
       );
     }
 
-    return value.filter(
-      (application): application is DiscoveredApplication =>
-        this.isRecord(application) &&
-        typeof application.rootDirectory === "string",
-    );
-  }
-
-  private isRecord(value: unknown): value is Record<string, unknown> {
-    return typeof value === "object" && value !== null && !Array.isArray(value);
+    return slug;
   }
 }
