@@ -21,15 +21,17 @@ export class DeploymentsService {
     private readonly deploymentQueueService: DeploymentQueueService,
   ) {}
 
-  async create(dto: CreateDeploymentDto): Promise<Deployment> {
-    const project = await this.prismaService.client.project.findUnique({
+  async create(userId: string, dto: CreateDeploymentDto): Promise<Deployment> {
+    // The project must belong to the currently authenticated user.
+    const project = await this.prismaService.client.project.findFirst({
       where: {
         id: dto.projectId,
+        userId,
       },
     });
 
     if (!project) {
-      throw new NotFoundException(`Project ${dto.projectId} was not found`);
+      throw new NotFoundException("Project not found");
     }
 
     const deployment = await this.prismaService.client.$transaction(
@@ -99,21 +101,17 @@ export class DeploymentsService {
     }
   }
 
-  async findOne(id: string): Promise<Deployment> {
-    const deployment = await this.prismaService.client.deployment.findUnique({
-      where: {
-        id,
-      },
-    });
-
-    if (!deployment) {
-      throw new NotFoundException(`Deployment ${id} was not found`);
-    }
-
-    return deployment;
+  async findOne(userId: string, id: string): Promise<Deployment> {
+    return this.requireOwnedDeployment(userId, id);
   }
 
-  async findAnalysis(deploymentId: string): Promise<DeploymentAnalysis> {
+  async findAnalysis(
+    userId: string,
+    deploymentId: string,
+  ): Promise<DeploymentAnalysis> {
+    // Verify ownership before exposing deployment analysis.
+    await this.requireOwnedDeployment(userId, deploymentId);
+
     const analysis =
       await this.prismaService.client.deploymentAnalysis.findUnique({
         where: {
@@ -130,19 +128,12 @@ export class DeploymentsService {
     return analysis;
   }
 
-  async findLogs(deploymentId: string): Promise<DeploymentLog[]> {
-    const deployment = await this.prismaService.client.deployment.findUnique({
-      where: {
-        id: deploymentId,
-      },
-      select: {
-        id: true,
-      },
-    });
-
-    if (!deployment) {
-      throw new NotFoundException(`Deployment ${deploymentId} was not found`);
-    }
+  async findLogs(
+    userId: string,
+    deploymentId: string,
+  ): Promise<DeploymentLog[]> {
+    // Verify ownership before exposing deployment logs.
+    await this.requireOwnedDeployment(userId, deploymentId);
 
     return this.prismaService.client.deploymentLog.findMany({
       where: {
@@ -159,16 +150,9 @@ export class DeploymentsService {
     });
   }
 
-  async stop(id: string): Promise<Deployment> {
-    const deployment = await this.prismaService.client.deployment.findUnique({
-      where: {
-        id,
-      },
-    });
-
-    if (!deployment) {
-      throw new NotFoundException(`Deployment ${id} was not found`);
-    }
+  async stop(userId: string, id: string): Promise<Deployment> {
+    // Only the owner can stop this deployment.
+    const deployment = await this.requireOwnedDeployment(userId, id);
 
     if (deployment.status === DeploymentStatus.STOPPED) {
       throw new ConflictException(`Deployment ${id} is already stopped`);
@@ -202,10 +186,17 @@ export class DeploymentsService {
     }
   }
 
-  async restart(id: string): Promise<Deployment> {
-    const deployment = await this.prismaService.client.deployment.findUnique({
+  async restart(userId: string, id: string): Promise<Deployment> {
+    /*
+     * This query performs the ownership check and includes the deployment
+     * analysis required for determining the application port.
+     */
+    const deployment = await this.prismaService.client.deployment.findFirst({
       where: {
         id,
+        project: {
+          userId,
+        },
       },
       include: {
         analysis: true,
@@ -213,7 +204,7 @@ export class DeploymentsService {
     });
 
     if (!deployment) {
-      throw new NotFoundException(`Deployment ${id} was not found`);
+      throw new NotFoundException("Deployment not found");
     }
 
     const restartableStatuses: DeploymentStatus[] = [
@@ -281,7 +272,7 @@ export class DeploymentsService {
         error instanceof Error ? error.message : "Unknown queue error";
 
       /*
-       * Restore the deployment's previous status when Redis cannot
+       * Restore the previous deployment status when Redis cannot
        * accept the restart job.
        */
       await this.prismaService.client.$transaction([
@@ -326,6 +317,34 @@ export class DeploymentsService {
       },
     });
 
-    return this.findOne(id);
+    // Return the deployment only after rechecking its ownership.
+    return this.findOne(userId, id);
+  }
+
+  /**
+   * Finds a deployment only when it belongs to the authenticated user.
+   *
+   * A 404 response is returned for both:
+   * - A deployment that does not exist
+   * - A deployment belonging to another user
+   */
+  private async requireOwnedDeployment(
+    userId: string,
+    deploymentId: string,
+  ): Promise<Deployment> {
+    const deployment = await this.prismaService.client.deployment.findFirst({
+      where: {
+        id: deploymentId,
+        project: {
+          userId,
+        },
+      },
+    });
+
+    if (!deployment) {
+      throw new NotFoundException("Deployment not found");
+    }
+
+    return deployment;
   }
 }
