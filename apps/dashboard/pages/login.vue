@@ -40,6 +40,10 @@ onMounted(async () => {
 function continueWithGitHub() {
   login(returnTo.value);
 }
+
+const sessionExpired = computed(() => {
+  return route.query.expired === "true";
+});
 </script>
 
 <template>
@@ -55,11 +59,11 @@ function continueWithGitHub() {
         D
       </div>
 
-      <h1 class="text-3xl font-bold">Sign in to DevPilot</h1>
+      <h1 class="text-3xl font-bold">Deploy your projects with DevPilot</h1>
 
       <p class="mt-3 text-sm leading-6 text-slate-400">
-        Connect your GitHub account to import repositories and manage
-        deployments.
+        Sign in with GitHub to connect repositories, create deployments, monitor
+        build logs, and manage your running applications.
       </p>
 
       <div
@@ -67,6 +71,13 @@ function continueWithGitHub() {
         class="mt-5 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-300"
       >
         {{ errorMessage }}
+      </div>
+
+      <div
+        v-if="sessionExpired"
+        class="mt-5 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm leading-6 text-amber-200"
+      >
+        Your DevPilot session has expired. Please sign in again to continue.
       </div>
 
       <button
@@ -94,6 +105,10 @@ function continueWithGitHub() {
 
         Continue with GitHub
       </button>
+      <p class="mt-5 text-center text-xs leading-5 text-slate-500">
+        DevPilot uses your GitHub account to identify you and provide access to
+        your own projects and deployments.
+      </p>
     </section>
   </main>
 </template>
