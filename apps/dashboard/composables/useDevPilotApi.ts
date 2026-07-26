@@ -7,32 +7,34 @@ import type {
 
 export function useDevPilotApi() {
   const config = useRuntimeConfig();
-  const apiBaseUrl = config.public.apiBaseUrl;
+
+  const api = $fetch.create({
+    baseURL: config.public.apiBaseUrl,
+    credentials: "include",
+  });
 
   function getHealth() {
-    return $fetch<HealthResponse>(`${apiBaseUrl}/health`);
+    return api<HealthResponse>("/health");
   }
 
   function getProjects() {
-    return $fetch<Project[]>(`${apiBaseUrl}/projects`);
+    return api<Project[]>("/projects");
   }
 
   function getProject(projectId: string) {
-    return $fetch<Project>(`${apiBaseUrl}/projects/${projectId}`);
+    return api<Project>(`/projects/${projectId}`);
   }
 
   function getProjectDeployments(projectId: string) {
-    return $fetch<Deployment[]>(
-      `${apiBaseUrl}/projects/${projectId}/deployments`,
-    );
+    return api<Deployment[]>(`/projects/${projectId}/deployments`);
   }
 
   function getDeployment(deploymentId: string) {
-    return $fetch<Deployment>(`${apiBaseUrl}/deployments/${deploymentId}`);
+    return api<Deployment>(`/deployments/${deploymentId}`);
   }
 
   function createDeployment(projectId: string) {
-    return $fetch<Deployment>(`${apiBaseUrl}/deployments`, {
+    return api<Deployment>("/deployments", {
       method: "POST",
       body: {
         projectId,
@@ -41,27 +43,19 @@ export function useDevPilotApi() {
   }
 
   function stopDeployment(deploymentId: string) {
-    return $fetch<Deployment>(
-      `${apiBaseUrl}/deployments/${deploymentId}/stop`,
-      {
-        method: "POST",
-      },
-    );
+    return api<Deployment>(`/deployments/${deploymentId}/stop`, {
+      method: "POST",
+    });
   }
 
   function restartDeployment(deploymentId: string) {
-    return $fetch<Deployment>(
-      `${apiBaseUrl}/deployments/${deploymentId}/restart`,
-      {
-        method: "POST",
-      },
-    );
+    return api<Deployment>(`/deployments/${deploymentId}/restart`, {
+      method: "POST",
+    });
   }
 
   function getDeploymentLogs(deploymentId: string) {
-    return $fetch<DeploymentLog[]>(
-      `${apiBaseUrl}/deployments/${deploymentId}/logs`,
-    );
+    return api<DeploymentLog[]>(`/deployments/${deploymentId}/logs`);
   }
 
   return {
