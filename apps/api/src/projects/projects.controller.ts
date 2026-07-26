@@ -6,82 +6,57 @@ import {
   Patch,
   Post,
   Req,
-  UnauthorizedException,
+  UseGuards,
 } from "@nestjs/common";
-import type { Request } from "express";
-import { AuthService } from "../auth/auth.service.js";
-import type { AuthenticatedUser } from "../auth/auth.types.js";
+import { AuthGuard, type AuthenticatedRequest } from "../auth/auth.guard.js";
 import { ImportProjectDto } from "./dto/import-project.dto.js";
 import { UpdateRootDirectoryDto } from "./dto/update-root-directory.dto.js";
 import { ProjectsService } from "./projects.service.js";
 
+@UseGuards(AuthGuard)
 @Controller("projects")
 export class ProjectsController {
-  constructor(
-    private readonly projectsService: ProjectsService,
-    private readonly authService: AuthService,
-  ) {}
+  constructor(private readonly projectsService: ProjectsService) {}
 
   @Post("import")
-  async importProject(@Req() request: Request, @Body() body: ImportProjectDto) {
-    const user = await this.requireUser(request);
-
-    return this.projectsService.importProject(user.id, body);
+  importProject(
+    @Req() request: AuthenticatedRequest,
+    @Body() body: ImportProjectDto,
+  ) {
+    return this.projectsService.importProject(request.user.id, body);
   }
 
   @Get()
-  async findAll(@Req() request: Request) {
-    const user = await this.requireUser(request);
-
-    return this.projectsService.findAll(user.id);
+  findAll(@Req() request: AuthenticatedRequest) {
+    return this.projectsService.findAll(request.user.id);
   }
 
   @Get(":projectId/deployments")
-  async findDeployments(
+  findDeployments(
     @Param("projectId") projectId: string,
-    @Req() request: Request,
+    @Req() request: AuthenticatedRequest,
   ) {
-    const user = await this.requireUser(request);
-
-    return this.projectsService.findDeployments(user.id, projectId);
+    return this.projectsService.findDeployments(request.user.id, projectId);
   }
 
   @Get(":projectId")
-  async findOne(
+  findOne(
     @Param("projectId") projectId: string,
-    @Req() request: Request,
+    @Req() request: AuthenticatedRequest,
   ) {
-    const user = await this.requireUser(request);
-
-    return this.projectsService.findOne(user.id, projectId);
+    return this.projectsService.findOne(request.user.id, projectId);
   }
 
   @Patch(":projectId/root-directory")
-  async updateRootDirectory(
+  updateRootDirectory(
     @Param("projectId") projectId: string,
     @Body() body: UpdateRootDirectoryDto,
-    @Req() request: Request,
+    @Req() request: AuthenticatedRequest,
   ) {
-    const user = await this.requireUser(request);
-
     return this.projectsService.updateRootDirectory(
-      user.id,
+      request.user.id,
       projectId,
       body.rootDirectory,
     );
-  }
-
-  private async requireUser(request: Request): Promise<AuthenticatedUser> {
-    const cookieName = this.authService.getCookieName();
-
-    const sessionToken = request.cookies?.[cookieName] as string | undefined;
-
-    const user = await this.authService.getAuthenticatedUser(sessionToken);
-
-    if (!user) {
-      throw new UnauthorizedException("Authentication is required");
-    }
-
-    return user;
   }
 }
