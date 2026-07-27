@@ -1,20 +1,24 @@
 <script lang="ts" setup>
-import { useAuth } from "~/composables/useAuth";
-definePageMeta({
-  layout: false,
-});
+import { useAppToast } from "~/composables/useAppToast";
+import { Icon } from "@iconify/vue";
+
+definePageMeta({ layout: false });
 
 const route = useRoute();
 const { isAuthenticated, initialized, loading, ensureInitialized, login } =
   useAuth();
+const toast = useAppToast();
+
+const isRedirecting = ref(false);
 
 const errorMessage = computed(() => {
   return typeof route.query.error === "string" ? route.query.error : null;
 });
 
+const sessionExpired = computed(() => route.query.expired === "true");
+
 const returnTo = computed(() => {
   const redirect = route.query.redirect;
-
   if (
     typeof redirect === "string" &&
     redirect.startsWith("/") &&
@@ -23,47 +27,61 @@ const returnTo = computed(() => {
   ) {
     return redirect;
   }
-
   return "/";
 });
 
 onMounted(async () => {
   await ensureInitialized();
-
   if (isAuthenticated.value) {
-    await navigateTo(returnTo.value, {
-      replace: true,
-    });
+    await navigateTo(returnTo.value, { replace: true });
+    return;
+  }
+
+  if (errorMessage.value) {
+    toast.error(errorMessage.value);
+  } else if (sessionExpired.value) {
+    toast.warning("Your session has expired. Please sign in again.");
   }
 });
 
-function continueWithGitHub() {
-  login(returnTo.value);
+async function continueWithGitHub() {
+  if (isRedirecting.value) return;
+  isRedirecting.value = true;
+  try {
+    await login(returnTo.value);
+    // If login() resolves without navigating away (e.g. it just
+    // returns a URL and something else redirects), isRedirecting stays
+    // true since a navigation is imminent.
+  } catch (err) {
+    isRedirecting.value = false;
+    console.error(err);
+    toast.error(
+      "GitHub sign-in failed",
+      "Something went wrong while connecting to GitHub. Please try again.",
+    );
+  }
 }
-
-const sessionExpired = computed(() => {
-  return route.query.expired === "true";
-});
 </script>
 
 <template>
   <main
-    class="flex min-h-screen items-center justify-center bg-slate-950 px-6 text-white"
+    class="fixed inset-0 z-40 flex items-center justify-center overflow-y-auto bg-slate-950 px-6 text-white"
   >
     <section
-      class="w-full max-w-md rounded-2xl border border-slate-800 bg-slate-900 p-8 shadow-2xl"
+      v-motion
+      :enter="{ opacity: 1, scale: 1 }"
+      :initial="{ opacity: 0, scale: 0.95 }"
+      class="w-full max-w-md rounded-3xl border border-slate-800 bg-slate-900/80 p-8 shadow-2xl backdrop-blur-sm"
     >
       <div
-        class="mb-6 flex h-12 w-12 items-center justify-center rounded-xl bg-blue-600 text-xl font-bold"
+        class="mb-6 flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-cyan-400 to-blue-500 text-2xl font-bold text-slate-950 shadow-lg shadow-cyan-500/20"
       >
         D
       </div>
-
-      <h1 class="text-3xl font-bold">Deploy your projects with DevPilot</h1>
-
+      <h1 class="text-3xl font-bold tracking-tight">Deploy with DevPilot</h1>
       <p class="mt-3 text-sm leading-6 text-slate-400">
-        Sign in with GitHub to connect repositories, create deployments, monitor
-        build logs, and manage your running applications.
+        Sign in with GitHub to connect repositories, create deployments, and
+        monitor your apps.
       </p>
 
       <div
@@ -72,42 +90,37 @@ const sessionExpired = computed(() => {
       >
         {{ errorMessage }}
       </div>
-
       <div
         v-if="sessionExpired"
-        class="mt-5 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm leading-6 text-amber-200"
+        class="mt-5 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-200"
       >
-        Your DevPilot session has expired. Please sign in again to continue.
+        Your session has expired. Please sign in again.
       </div>
 
       <button
-        :disabled="loading || !initialized"
-        class="mt-7 flex w-full items-center justify-center gap-3 rounded-lg bg-white px-4 py-3 font-semibold text-slate-950 transition hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-60"
-        type="button"
+        :disabled="loading || !initialized || isRedirecting"
+        class="mt-7 flex w-full items-center justify-center gap-3 rounded-xl bg-white px-4 py-3.5 font-semibold text-slate-950 transition hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-60"
         @click="continueWithGitHub"
       >
-        <span
-          v-if="loading || !initialized"
-          class="h-5 w-5 animate-spin rounded-full border-2 border-slate-400 border-t-slate-950"
-        />
-
-        <svg
-          v-else
-          aria-hidden="true"
-          class="h-5 w-5"
-          fill="currentColor"
-          viewBox="0 0 24 24"
-        >
-          <path
-            d="M12 .7a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2.23c-3.22.7-3.9-1.37-3.9-1.37-.53-1.34-1.29-1.7-1.29-1.7-1.05-.72.08-.71.08-.71 1.17.08 1.78 1.2 1.78 1.2 1.04 1.78 2.72 1.27 3.38.97.1-.75.41-1.27.74-1.56-2.57-.29-5.27-1.28-5.27-5.69 0-1.26.45-2.29 1.2-3.1-.12-.29-.52-1.47.11-3.06 0 0 .98-.31 3.16 1.18A10.9 10.9 0 0 1 12 6.09c.98 0 1.94.13 2.85.38 2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.77.11 3.06.75.81 1.2 1.84 1.2 3.1 0 4.42-2.71 5.39-5.29 5.68.42.36.79 1.07.79 2.16v3.26c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .7Z"
+        <template v-if="loading || !initialized">
+          <span
+            class="h-5 w-5 animate-spin rounded-full border-2 border-slate-400 border-t-slate-950"
           />
-        </svg>
-
-        Continue with GitHub
+        </template>
+        <template v-else-if="isRedirecting">
+          <span
+            class="h-5 w-5 animate-spin rounded-full border-2 border-slate-400 border-t-slate-950"
+          />
+          Redirecting to GitHub…
+        </template>
+        <template v-else>
+          <Icon class="h-5 w-5" icon="mdi:github" />
+          Continue with GitHub
+        </template>
       </button>
-      <p class="mt-5 text-center text-xs leading-5 text-slate-500">
-        DevPilot uses your GitHub account to identify you and provide access to
-        your own projects and deployments.
+      <p class="mt-5 text-center text-xs text-slate-500">
+        DevPilot uses GitHub to identify you and provide access to your
+        projects.
       </p>
     </section>
   </main>
