@@ -6,15 +6,18 @@ import type {
   DeploymentStatus,
   Project,
 } from "~/types/api";
+import { Icon } from "@iconify/vue";
+import { useAppToast } from "~/composables/useAppToast";
 
 const route = useRoute();
 const api = useDevPilotApi();
+
+const toast = useAppToast();
 
 const projectId = computed(() => route.params.id as string);
 
 const project = ref<Project | null>(null);
 const deployments = ref<Deployment[]>([]);
-
 const loading = ref(true);
 const refreshing = ref(false);
 const actionLoading = ref<"deploy" | "stop" | "restart" | null>(null);
@@ -40,75 +43,49 @@ const activeStatuses: DeploymentStatus[] = [
 ];
 
 const latestDeployment = computed(() => deployments.value[0] ?? null);
-
 const selectedDeployment = computed(() => {
-  if (!selectedDeploymentId.value) {
-    return null;
-  }
-
+  if (!selectedDeploymentId.value) return null;
   return (
-    deployments.value.find(
-      (deployment) => deployment.id === selectedDeploymentId.value,
-    ) ?? null
+    deployments.value.find((d) => d.id === selectedDeploymentId.value) ?? null
   );
 });
-
 const isSelectedDeploymentActive = computed(() => {
   const status = selectedDeployment.value?.status;
-
   return status ? activeStatuses.includes(status) : false;
 });
-
 const isDeploymentActive = computed(() => {
   const status = latestDeployment.value?.status;
-
   return status ? activeStatuses.includes(status) : false;
 });
-
 const canStop = computed(
   () =>
     latestDeployment.value?.status === "READY" && actionLoading.value === null,
 );
-
 const canRestart = computed(() => {
-  const deployment = latestDeployment.value;
-
-  if (!deployment || actionLoading.value !== null) {
-    return false;
-  }
-
+  const d = latestDeployment.value;
+  if (!d || actionLoading.value !== null) return false;
   return (
-    (deployment.status === "STOPPED" || deployment.status === "FAILED") &&
-    Boolean(deployment.imageTag)
+    (d.status === "STOPPED" || d.status === "FAILED") && Boolean(d.imageTag)
   );
 });
-
 const canDeploy = computed(
   () => !isDeploymentActive.value && actionLoading.value === null,
 );
 
-function getRequestError(error: unknown, fallbackMessage: string): string {
-  if (typeof error !== "object" || error === null) {
-    return fallbackMessage;
-  }
-
-  const possibleError = error as {
-    data?: {
-      message?: string | string[];
-    };
+function getRequestError(error: unknown, fallback: string): string {
+  if (typeof error !== "object" || error === null) return fallback;
+  const e = error as {
+    data?: { message?: string | string[] };
     message?: string;
   };
-
-  const apiMessage = possibleError.data?.message;
-
-  if (Array.isArray(apiMessage)) {
-    return apiMessage.join(", ");
-  }
-
-  return apiMessage ?? possibleError.message ?? fallbackMessage;
+  const msg = e.data?.message;
+  return Array.isArray(msg) ? msg.join(", ") : (msg ?? e.message ?? fallback);
 }
 
-async function loadProject(showLoader = true) {
+async function loadProject(
+  showLoader = true,
+  showSuccessToast = false,
+): Promise<void> {
   if (showLoader) {
     loading.value = true;
   } else {
@@ -141,11 +118,20 @@ async function loadProject(showLoader = true) {
 
     updatePolling();
     updateLogPolling();
-  } catch (error: unknown) {
+
+    if (showSuccessToast) {
+      toast.success(
+        "Project refreshed",
+        "The latest deployment status and logs have been loaded.",
+      );
+    }
+  } catch (error) {
     errorMessage.value = getRequestError(
       error,
       "The project could not be loaded.",
     );
+
+    toast.error("Project could not be loaded", errorMessage.value);
   } finally {
     loading.value = false;
     refreshing.value = false;
@@ -155,10 +141,9 @@ async function loadProject(showLoader = true) {
 async function refreshDeployments() {
   try {
     deployments.value = await api.getProjectDeployments(projectId.value);
-
     updatePolling();
     updateLogPolling();
-  } catch (error: unknown) {
+  } catch (error) {
     errorMessage.value = getRequestError(
       error,
       "Deployment status could not be refreshed.",
@@ -166,13 +151,13 @@ async function refreshDeployments() {
   }
 }
 
-async function deployProject() {
-  if (!canDeploy.value) {
-    return;
-  }
+async function deployProject(): Promise<void> {
+  if (!canDeploy.value) return;
 
   actionLoading.value = "deploy";
   errorMessage.value = "";
+
+  const toastId = toast.loading("Creating deployment...");
 
   try {
     const deployment = await api.createDeployment(projectId.value);
@@ -189,134 +174,128 @@ async function deployProject() {
 
     startPolling();
     startLogPolling();
-  } catch (error: unknown) {
+
+    toast.dismiss(toastId);
+    toast.success(
+      "Deployment created",
+      "The deployment has been added to the build queue.",
+    );
+  } catch (error) {
     errorMessage.value = getRequestError(
       error,
       "The deployment could not be started.",
     );
+
+    toast.dismiss(toastId);
+    toast.error("Deployment failed", errorMessage.value);
   } finally {
     actionLoading.value = null;
   }
 }
 
-async function stopLatestDeployment() {
+async function stopLatestDeployment(): Promise<void> {
   const deployment = latestDeployment.value;
 
-  if (!deployment || !canStop.value) {
-    return;
-  }
+  if (!deployment || !canStop.value) return;
 
   actionLoading.value = "stop";
   errorMessage.value = "";
 
+  const toastId = toast.loading("Stopping deployment...");
+
   try {
     await api.stopDeployment(deployment.id);
-
-    // The stop endpoint queues the operation, so continue polling
-    // until the worker changes the status to STOPPED.
-    startPolling();
     await refreshDeployments();
-  } catch (error: unknown) {
+
+    toast.dismiss(toastId);
+    toast.success(
+      "Deployment stopped",
+      "The running application has been stopped successfully.",
+    );
+  } catch (error) {
     errorMessage.value = getRequestError(
       error,
       "The deployment could not be stopped.",
     );
+
+    toast.dismiss(toastId);
+    toast.error("Stop failed", errorMessage.value);
   } finally {
     actionLoading.value = null;
   }
 }
 
-async function restartLatestDeployment() {
+async function restartLatestDeployment(): Promise<void> {
   const deployment = latestDeployment.value;
 
-  if (!deployment || !canRestart.value) {
-    return;
-  }
+  if (!deployment || !canRestart.value) return;
 
   actionLoading.value = "restart";
   errorMessage.value = "";
 
+  const toastId = toast.loading("Restarting deployment...");
+
   try {
-    const updatedDeployment = await api.restartDeployment(deployment.id);
+    const updated = await api.restartDeployment(deployment.id);
 
-    replaceDeployment(updatedDeployment);
-    selectedDeploymentId.value = updatedDeployment.id;
+    replaceDeployment(updated);
+    selectedDeploymentId.value = updated.id;
 
-    await loadDeploymentLogs(updatedDeployment.id, false);
+    await loadDeploymentLogs(updated.id, false);
 
     startPolling();
     startLogPolling();
-  } catch (error: unknown) {
+
+    toast.dismiss(toastId);
+    toast.success("Restart requested", "The application is starting again.");
+  } catch (error) {
     errorMessage.value = getRequestError(
       error,
       "The deployment could not be restarted.",
     );
+
+    toast.dismiss(toastId);
+    toast.error("Restart failed", errorMessage.value);
   } finally {
     actionLoading.value = null;
   }
 }
 
-function replaceDeployment(updatedDeployment: Deployment) {
-  const index = deployments.value.findIndex(
-    (deployment) => deployment.id === updatedDeployment.id,
-  );
-
-  if (index === -1) {
-    deployments.value.unshift(updatedDeployment);
-    return;
-  }
-
-  deployments.value[index] = updatedDeployment;
+function replaceDeployment(updated: Deployment) {
+  const idx = deployments.value.findIndex((d) => d.id === updated.id);
+  if (idx === -1) deployments.value.unshift(updated);
+  else deployments.value[idx] = updated;
 }
 
 function startPolling() {
-  if (pollingTimer) {
-    return;
-  }
-
+  if (pollingTimer) return;
   pollingTimer = setInterval(() => {
     void refreshDeployments();
   }, 2000);
 }
-
 function stopPolling() {
-  if (!pollingTimer) {
-    return;
+  if (pollingTimer) {
+    clearInterval(pollingTimer);
+    pollingTimer = null;
   }
-
-  clearInterval(pollingTimer);
-  pollingTimer = null;
 }
-
 function updatePolling() {
-  if (isDeploymentActive.value || actionLoading.value === "stop") {
+  if (isDeploymentActive.value || actionLoading.value === "stop")
     startPolling();
-  } else {
-    stopPolling();
-  }
+  else stopPolling();
 }
 
 async function loadDeploymentLogs(deploymentId: string, showLoader = true) {
-  if (showLoader) {
-    logsLoading.value = true;
-  } else {
-    logsRefreshing.value = true;
-  }
-
+  if (showLoader) logsLoading.value = true;
+  else logsRefreshing.value = true;
   logsErrorMessage.value = "";
-
   try {
     const logs = await api.getDeploymentLogs(deploymentId);
-
-    if (selectedDeploymentId.value !== deploymentId) {
-      return;
-    }
-
+    if (selectedDeploymentId.value !== deploymentId) return;
     deploymentLogs.value = logs;
-
     await nextTick();
     scrollTerminalToBottom();
-  } catch (error: unknown) {
+  } catch (error) {
     if (selectedDeploymentId.value === deploymentId) {
       logsErrorMessage.value = getRequestError(
         error,
@@ -335,52 +314,37 @@ async function selectDeployment(deploymentId: string) {
   if (
     selectedDeploymentId.value === deploymentId &&
     deploymentLogs.value.length
-  ) {
+  )
     return;
-  }
-
   stopLogPolling();
   selectedDeploymentId.value = deploymentId;
   deploymentLogs.value = [];
   logsErrorMessage.value = "";
-
   await loadDeploymentLogs(deploymentId);
   updateLogPolling();
 }
 
 function startLogPolling() {
-  if (logPollingTimer || !selectedDeploymentId.value) {
-    return;
-  }
-
+  if (logPollingTimer || !selectedDeploymentId.value) return;
   logPollingTimer = setInterval(() => {
-    if (selectedDeploymentId.value) {
+    if (selectedDeploymentId.value)
       void loadDeploymentLogs(selectedDeploymentId.value, false);
-    }
   }, 2000);
 }
-
 function stopLogPolling() {
-  if (!logPollingTimer) {
-    return;
+  if (logPollingTimer) {
+    clearInterval(logPollingTimer);
+    logPollingTimer = null;
   }
-
-  clearInterval(logPollingTimer);
-  logPollingTimer = null;
 }
-
 function updateLogPolling() {
-  if (isSelectedDeploymentActive.value) {
-    startLogPolling();
-  } else {
-    stopLogPolling();
-  }
+  if (isSelectedDeploymentActive.value) startLogPolling();
+  else stopLogPolling();
 }
 
 function scrollTerminalToBottom() {
-  if (terminalElement.value) {
+  if (terminalElement.value)
     terminalElement.value.scrollTop = terminalElement.value.scrollHeight;
-  }
 }
 
 function formatLogTime(value: string) {
@@ -391,7 +355,6 @@ function formatLogTime(value: string) {
     hour12: false,
   }).format(new Date(value));
 }
-
 function getLogLevelClass(level: DeploymentLogLevel) {
   switch (level) {
     case "ERROR":
@@ -400,31 +363,25 @@ function getLogLevelClass(level: DeploymentLogLevel) {
       return "text-amber-300";
     case "DEBUG":
       return "text-slate-500";
-    case "INFO":
     default:
       return "text-emerald-300";
   }
 }
-
 function formatDate(value: string | null) {
-  if (!value) {
-    return "—";
-  }
-
-  return new Intl.DateTimeFormat("en", {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(new Date(value));
+  return value
+    ? new Intl.DateTimeFormat("en", {
+        dateStyle: "medium",
+        timeStyle: "short",
+      }).format(new Date(value))
+    : "—";
 }
-
-function shortCommit(commitSha: string | null) {
-  return commitSha?.slice(0, 8) ?? "—";
+function shortCommit(sha: string | null) {
+  return sha?.slice(0, 8) ?? "—";
 }
 
 onMounted(() => {
   void loadProject();
 });
-
 onBeforeUnmount(() => {
   stopPolling();
   stopLogPolling();
@@ -438,7 +395,7 @@ onBeforeUnmount(() => {
         class="inline-flex items-center gap-2 text-sm text-slate-400 transition hover:text-white"
         to="/"
       >
-        ← Back to projects
+        <Icon class="h-4 w-4" icon="mdi:arrow-left" /> Back to projects
       </NuxtLink>
 
       <div v-if="loading" class="mt-8 space-y-6">
@@ -455,15 +412,18 @@ onBeforeUnmount(() => {
         class="mt-8 rounded-2xl border border-rose-500/30 bg-rose-500/10 p-6"
       >
         <h1 class="text-xl font-semibold text-rose-200">Project unavailable</h1>
-
         <p class="mt-2 text-sm text-rose-300">
           {{ errorMessage || "The requested project was not found." }}
         </p>
       </div>
 
       <template v-else>
+        <!-- Project Overview -->
         <section
-          class="mt-8 rounded-2xl border border-slate-800 bg-slate-900/60 p-6 sm:p-8"
+          v-motion
+          :enter="{ opacity: 1, y: 0 }"
+          :initial="{ opacity: 0, y: 20 }"
+          class="mt-8 rounded-2xl border border-slate-800 bg-slate-900/60 p-6 backdrop-blur-sm sm:p-8"
         >
           <div
             class="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between"
@@ -473,19 +433,17 @@ onBeforeUnmount(() => {
                 <h1 class="text-3xl font-bold tracking-tight sm:text-4xl">
                   {{ project.name }}
                 </h1>
-
                 <StatusBadge :status="latestDeployment?.status" />
               </div>
-
               <a
                 :href="project.repositoryUrl"
                 class="mt-3 inline-block text-sm text-cyan-400 transition hover:text-cyan-300"
                 rel="noopener noreferrer"
                 target="_blank"
               >
-                {{ project.repositoryOwner }}/{{ project.repositoryName }} ↗
+                {{ project.repositoryOwner }}/{{ project.repositoryName }}
+                <Icon class="inline h-3 w-3" icon="mdi:arrow-top-right" />
               </a>
-
               <div class="mt-6 flex flex-wrap gap-x-8 gap-y-4 text-sm">
                 <div>
                   <p class="text-slate-500">Production branch</p>
@@ -493,14 +451,12 @@ onBeforeUnmount(() => {
                     {{ project.productionBranch }}
                   </p>
                 </div>
-
                 <div>
                   <p class="text-slate-500">Root directory</p>
                   <p class="mt-1 font-medium text-slate-200">
                     {{ project.rootDirectory }}
                   </p>
                 </div>
-
                 <div>
                   <p class="text-slate-500">Total deployments</p>
                   <p class="mt-1 font-medium text-slate-200">
@@ -509,40 +465,38 @@ onBeforeUnmount(() => {
                 </div>
               </div>
             </div>
-
             <div class="flex flex-wrap gap-3">
               <button
                 :disabled="refreshing || actionLoading !== null"
-                class="rounded-xl border border-slate-700 bg-slate-900 px-4 py-2.5 text-sm font-semibold transition hover:border-slate-500 disabled:cursor-not-allowed disabled:opacity-50"
-                type="button"
-                @click="loadProject(false)"
+                class="flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-900 px-4 py-2.5 text-sm font-semibold transition hover:border-slate-500 disabled:opacity-50"
+                @click="loadProject(false, true)"
               >
-                {{ refreshing ? "Refreshing..." : "Refresh" }}
+                <Icon v-if="!refreshing" class="h-4 w-4" icon="mdi:refresh" />
+                <span
+                  v-else
+                  class="h-4 w-4 animate-spin rounded-full border-2 border-slate-500 border-t-cyan-400"
+                />
+                {{ refreshing ? "Refreshing…" : "Refresh" }}
               </button>
-
               <button
                 v-if="latestDeployment?.status === 'READY'"
                 :disabled="!canStop"
-                class="rounded-xl border border-rose-500/40 bg-rose-500/10 px-4 py-2.5 text-sm font-semibold text-rose-300 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-50"
-                type="button"
+                class="rounded-xl border border-rose-500/40 bg-rose-500/10 px-4 py-2.5 text-sm font-semibold text-rose-300 transition hover:bg-rose-500/20 disabled:opacity-50"
                 @click="stopLatestDeployment"
               >
-                {{ actionLoading === "stop" ? "Stopping..." : "Stop" }}
+                {{ actionLoading === "stop" ? "Stopping…" : "Stop" }}
               </button>
-
               <button
                 v-if="
                   latestDeployment?.status === 'STOPPED' ||
                   latestDeployment?.status === 'FAILED'
                 "
                 :disabled="!canRestart"
-                class="rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-2.5 text-sm font-semibold text-emerald-300 transition hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-50"
-                type="button"
+                class="rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-2.5 text-sm font-semibold text-emerald-300 transition hover:bg-emerald-500/20 disabled:opacity-50"
                 @click="restartLatestDeployment"
               >
-                {{ actionLoading === "restart" ? "Restarting..." : "Restart" }}
+                {{ actionLoading === "restart" ? "Restarting…" : "Restart" }}
               </button>
-
               <a
                 v-if="
                   latestDeployment?.status === 'READY' &&
@@ -553,18 +507,17 @@ onBeforeUnmount(() => {
                 rel="noopener noreferrer"
                 target="_blank"
               >
-                Visit site ↗
+                Visit site
+                <Icon class="inline h-3 w-3" icon="mdi:arrow-top-right" />
               </a>
-
               <button
                 :disabled="!canDeploy"
-                class="rounded-xl bg-cyan-400 px-5 py-2.5 text-sm font-bold text-slate-950 transition hover:bg-cyan-300 disabled:cursor-not-allowed disabled:opacity-50"
-                type="button"
+                class="rounded-xl bg-cyan-400 px-5 py-2.5 text-sm font-bold text-slate-950 transition hover:bg-cyan-300 disabled:opacity-50"
                 @click="deployProject"
               >
                 {{
                   actionLoading === "deploy"
-                    ? "Deploying..."
+                    ? "Deploying…"
                     : isDeploymentActive
                       ? "Deployment in progress"
                       : "Deploy"
@@ -579,14 +532,13 @@ onBeforeUnmount(() => {
           class="mt-6 rounded-2xl border border-rose-500/30 bg-rose-500/10 p-5 text-rose-200"
         >
           <p class="font-semibold">Request failed</p>
-          <p class="mt-1 text-sm text-rose-300">
-            {{ errorMessage }}
-          </p>
+          <p class="mt-1 text-sm text-rose-300">{{ errorMessage }}</p>
         </div>
 
+        <!-- Current Deployment -->
         <section
           v-if="latestDeployment"
-          class="mt-8 rounded-2xl border border-slate-800 bg-slate-900/60 p-6"
+          class="mt-8 rounded-2xl border border-slate-800 bg-slate-900/60 p-6 backdrop-blur-sm"
         >
           <div class="flex items-center justify-between gap-4">
             <div>
@@ -595,17 +547,18 @@ onBeforeUnmount(() => {
               >
                 Current deployment
               </p>
-
               <h2 class="mt-2 text-2xl font-bold">
                 {{ latestDeployment.commitMessage || "Deployment" }}
               </h2>
             </div>
-
-            <span v-if="isDeploymentActive" class="text-sm text-cyan-300">
-              Updating automatically…
+            <span
+              v-if="isDeploymentActive"
+              class="flex items-center gap-2 text-sm text-cyan-300"
+            >
+              <span class="h-2 w-2 animate-pulse rounded-full bg-cyan-400" />
+              Updating…
             </span>
           </div>
-
           <div class="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <div class="rounded-xl bg-slate-950/70 p-4">
               <p class="text-xs uppercase tracking-wide text-slate-500">
@@ -615,7 +568,6 @@ onBeforeUnmount(() => {
                 {{ shortCommit(latestDeployment.commitSha) }}
               </p>
             </div>
-
             <div class="rounded-xl bg-slate-950/70 p-4">
               <p class="text-xs uppercase tracking-wide text-slate-500">
                 Branch
@@ -624,7 +576,6 @@ onBeforeUnmount(() => {
                 {{ latestDeployment.branch }}
               </p>
             </div>
-
             <div class="rounded-xl bg-slate-950/70 p-4">
               <p class="text-xs uppercase tracking-wide text-slate-500">
                 Assigned port
@@ -633,7 +584,6 @@ onBeforeUnmount(() => {
                 {{ latestDeployment.assignedPort ?? "—" }}
               </p>
             </div>
-
             <div class="rounded-xl bg-slate-950/70 p-4">
               <p class="text-xs uppercase tracking-wide text-slate-500">
                 Finished
@@ -643,7 +593,6 @@ onBeforeUnmount(() => {
               </p>
             </div>
           </div>
-
           <div
             v-if="latestDeployment.errorMessage"
             class="mt-5 rounded-xl border border-rose-500/30 bg-rose-500/10 p-4"
@@ -657,6 +606,7 @@ onBeforeUnmount(() => {
           </div>
         </section>
 
+        <!-- Logs -->
         <section
           v-if="selectedDeployment"
           class="mt-8 overflow-hidden rounded-2xl border border-slate-800 bg-slate-950"
@@ -667,20 +617,17 @@ onBeforeUnmount(() => {
             <div>
               <div class="flex flex-wrap items-center gap-3">
                 <div class="flex gap-1.5">
-                  <span class="h-3 w-3 rounded-full bg-rose-400" />
-                  <span class="h-3 w-3 rounded-full bg-amber-400" />
-                  <span class="h-3 w-3 rounded-full bg-emerald-400" />
+                  <span class="h-3 w-3 rounded-full bg-rose-400" /><span
+                    class="h-3 w-3 rounded-full bg-amber-400"
+                  /><span class="h-3 w-3 rounded-full bg-emerald-400" />
                 </div>
-
                 <h2 class="font-semibold text-slate-200">Deployment logs</h2>
                 <StatusBadge :status="selectedDeployment.status" />
               </div>
-
               <p class="mt-2 font-mono text-xs text-slate-500">
                 {{ selectedDeployment.id }}
               </p>
             </div>
-
             <div class="flex items-center gap-3">
               <span
                 v-if="isSelectedDeploymentActive"
@@ -689,22 +636,27 @@ onBeforeUnmount(() => {
                 <span class="h-2 w-2 animate-pulse rounded-full bg-cyan-400" />
                 Live
               </span>
-
-              <span v-else class="text-xs text-slate-500">
-                Deployment finished
-              </span>
-
+              <span v-else class="text-xs text-slate-500"
+                >Deployment finished</span
+              >
               <button
                 :disabled="logsLoading || logsRefreshing"
-                class="rounded-lg border border-slate-700 px-3 py-1.5 text-xs font-semibold text-slate-300 transition hover:border-slate-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
-                type="button"
+                class="flex items-center gap-1 rounded-lg border border-slate-700 px-3 py-1.5 text-xs font-semibold text-slate-300 transition hover:border-slate-500 hover:text-white disabled:opacity-50"
                 @click="loadDeploymentLogs(selectedDeployment.id, false)"
               >
-                {{ logsRefreshing ? "Refreshing..." : "Refresh logs" }}
+                <Icon
+                  v-if="!logsRefreshing"
+                  class="h-3 w-3"
+                  icon="mdi:refresh"
+                />
+                <span
+                  v-else
+                  class="h-3 w-3 animate-spin rounded-full border border-slate-500 border-t-white"
+                />
+                {{ logsRefreshing ? "Refreshing…" : "Refresh logs" }}
               </button>
             </div>
           </div>
-
           <div
             ref="terminalElement"
             class="h-[460px] overflow-y-auto p-5 font-mono text-xs leading-6 sm:text-sm"
@@ -713,40 +665,34 @@ onBeforeUnmount(() => {
               v-if="logsLoading"
               class="flex h-full items-center justify-center text-slate-500"
             >
-              Loading deployment logs...
+              Loading deployment logs…
             </div>
-
             <div
               v-else-if="logsErrorMessage"
               class="rounded-lg border border-rose-500/30 bg-rose-500/10 p-4 text-rose-300"
             >
               {{ logsErrorMessage }}
             </div>
-
             <div
               v-else-if="deploymentLogs.length === 0"
               class="flex h-full items-center justify-center text-slate-500"
             >
-              Waiting for deployment output...
+              Waiting for deployment output…
             </div>
-
             <div v-else>
               <div
                 v-for="log in deploymentLogs"
                 :key="log.id"
                 class="grid grid-cols-[70px_100px_minmax(0,1fr)] gap-3 border-b border-slate-900 py-1 last:border-0"
               >
-                <span class="text-slate-600">
-                  {{ formatLogTime(log.createdAt) }}
-                </span>
-
+                <span class="text-slate-600">{{
+                  formatLogTime(log.createdAt)
+                }}</span>
                 <span
                   :class="getLogLevelClass(log.level)"
                   class="truncate font-semibold"
+                  >[{{ log.stage }}]</span
                 >
-                  [{{ log.stage }}]
-                </span>
-
                 <span
                   :class="
                     log.level === 'ERROR'
@@ -756,14 +702,14 @@ onBeforeUnmount(() => {
                         : 'text-slate-300'
                   "
                   class="whitespace-pre-wrap break-words"
+                  >{{ log.message }}</span
                 >
-                  {{ log.message }}
-                </span>
               </div>
             </div>
           </div>
         </section>
 
+        <!-- History -->
         <section class="mt-8">
           <div class="flex items-center justify-between">
             <div>
@@ -774,14 +720,12 @@ onBeforeUnmount(() => {
               </p>
               <h2 class="mt-2 text-2xl font-bold">Deployment history</h2>
             </div>
-
             <p class="text-sm text-slate-500">
               {{ deployments.length }} deployment{{
                 deployments.length === 1 ? "" : "s"
               }}
             </p>
           </div>
-
           <div
             v-if="deployments.length === 0"
             class="mt-6 rounded-2xl border border-dashed border-slate-700 bg-slate-900/40 p-12 text-center"
@@ -791,16 +735,19 @@ onBeforeUnmount(() => {
               Start the first deployment using the Deploy button.
             </p>
           </div>
-
           <div v-else class="mt-6 space-y-4">
             <article
-              v-for="deployment in deployments"
+              v-for="(deployment, idx) in deployments"
               :key="deployment.id"
+              v-motion
               :class="
                 selectedDeploymentId === deployment.id
                   ? 'border-cyan-500/50 bg-cyan-500/5'
                   : 'border-slate-800 bg-slate-900/60 hover:border-slate-700'
               "
+              :delay="idx * 60"
+              :enter="{ opacity: 1, y: 0 }"
+              :initial="{ opacity: 0, y: 20 }"
               class="cursor-pointer rounded-2xl border p-5 transition"
               @click="selectDeployment(deployment.id)"
             >
@@ -810,22 +757,18 @@ onBeforeUnmount(() => {
                 <div class="min-w-0">
                   <div class="flex flex-wrap items-center gap-3">
                     <StatusBadge :status="deployment.status" />
-
-                    <span class="font-mono text-xs text-slate-500">
-                      {{ deployment.id }}
-                    </span>
+                    <span class="font-mono text-xs text-slate-500">{{
+                      deployment.id
+                    }}</span>
                   </div>
-
                   <p class="mt-3 truncate font-medium text-slate-200">
                     {{ deployment.commitMessage || "Commit not available" }}
                   </p>
-
                   <p class="mt-1 text-sm text-slate-500">
-                    {{ shortCommit(deployment.commitSha) }}
-                    · {{ deployment.branch }} ·
+                    {{ shortCommit(deployment.commitSha) }} ·
+                    {{ deployment.branch }} ·
                     {{ formatDate(deployment.createdAt) }}
                   </p>
-
                   <p
                     v-if="deployment.errorMessage"
                     class="mt-3 text-sm text-rose-300"
@@ -833,16 +776,13 @@ onBeforeUnmount(() => {
                     {{ deployment.errorMessage }}
                   </p>
                 </div>
-
                 <div class="flex shrink-0 items-center gap-4">
                   <button
                     class="text-sm font-semibold text-slate-400 transition hover:text-cyan-300"
-                    type="button"
                     @click.stop="selectDeployment(deployment.id)"
                   >
                     View logs
                   </button>
-
                   <a
                     v-if="deployment.status === 'READY' && deployment.liveUrl"
                     :href="deployment.liveUrl"
@@ -851,7 +791,8 @@ onBeforeUnmount(() => {
                     target="_blank"
                     @click.stop
                   >
-                    Visit site ↗
+                    Visit site
+                    <Icon class="inline h-3 w-3" icon="mdi:arrow-top-right" />
                   </a>
                 </div>
               </div>
