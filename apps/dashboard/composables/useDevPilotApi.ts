@@ -2,7 +2,11 @@ import type {
   AuthResponse,
   Deployment,
   DeploymentLog,
+  GitHubInstallation,
+  GitHubRepositoriesResponse,
   HealthResponse,
+  ImportProjectPayload,
+  ImportProjectResponse,
   LogoutResponse,
   Project,
 } from "~/types/api";
@@ -145,6 +149,41 @@ export function useDevPilotApi() {
     window.location.assign(getGitHubLoginUrl(returnTo));
   }
 
+  function getGitHubInstallUrl(): string {
+    return `${config.public.apiBaseUrl}/github/install`;
+  }
+
+  function installGitHubApp(): void {
+    if (!import.meta.client) {
+      return;
+    }
+
+    window.location.assign(getGitHubInstallUrl());
+  }
+
+  function getGitHubInstallations(): Promise<GitHubInstallation[]> {
+    return api<GitHubInstallation[]>("/github/installations");
+  }
+
+  function getGitHubRepositories(
+    installationId: string,
+  ): Promise<GitHubRepositoriesResponse> {
+    return api<GitHubRepositoriesResponse>("/github/repositories", {
+      query: {
+        installationId,
+      },
+    });
+  }
+
+  function importProject(
+    payload: ImportProjectPayload,
+  ): Promise<ImportProjectResponse> {
+    return api<ImportProjectResponse>("/projects/import", {
+      method: "POST",
+      body: payload,
+    });
+  }
+
   return {
     getHealth,
     getProjects,
@@ -159,5 +198,11 @@ export function useDevPilotApi() {
     logout,
     getGitHubLoginUrl,
     loginWithGitHub,
+
+    getGitHubInstallUrl,
+    installGitHubApp,
+    getGitHubInstallations,
+    getGitHubRepositories,
+    importProject,
   };
 }
