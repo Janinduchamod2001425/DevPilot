@@ -201,7 +201,7 @@ export class GitHubService {
   getDashboardRedirectUrl(parameters: Record<string, string>): string {
     const dashboardUrl = this.configService.getOrThrow<string>("DASHBOARD_URL");
 
-    const redirectUrl = new URL("/", dashboardUrl);
+    const redirectUrl = new URL("/new", dashboardUrl);
 
     for (const [key, value] of Object.entries(parameters)) {
       redirectUrl.searchParams.set(key, value);
