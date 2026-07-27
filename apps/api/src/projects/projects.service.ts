@@ -7,12 +7,14 @@ import {
 import { PrismaService } from "../database/prisma.service.js";
 import { GitHubService } from "../github/github.service.js";
 import type { ImportProjectDto } from "./dto/import-project.dto.js";
+import { DeploymentsService } from "../deployments/deployments.service.js";
 
 @Injectable()
 export class ProjectsService {
   constructor(
     private readonly prismaService: PrismaService,
     private readonly githubService: GitHubService,
+    private readonly deploymentService: DeploymentsService,
   ) {}
 
   async importProject(userId: string, dto: ImportProjectDto) {
@@ -50,7 +52,7 @@ export class ProjectsService {
       repository.id,
     );
 
-    return this.prismaService.client.project.create({
+    const project = await this.prismaService.client.project.create({
       data: {
         name: repository.name,
         slug,
@@ -86,6 +88,29 @@ export class ProjectsService {
         },
       },
     });
+
+    try {
+      const deployment = await this.deploymentService.create(userId, {
+        projectId: project.id,
+      });
+
+      return {
+        project,
+        deployment,
+      };
+    } catch (error) {
+      console.error(
+        `Initial deployment could not be created for project ${project.id}:`,
+        error,
+      );
+
+      return {
+        project,
+        deployment: null,
+        deploymentWarning:
+          "The project was imported, but its first deployment could not be started.",
+      };
+    }
   }
 
   async findAll(userId: string) {
