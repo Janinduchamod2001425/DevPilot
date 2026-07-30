@@ -5,6 +5,7 @@ import type {
   DeploymentLogLevel,
   DeploymentStatus,
   Project,
+  RootDirectoryCandidate,
 } from "~/types/api";
 import { Icon } from "@iconify/vue";
 import { useAppToast } from "~/composables/useAppToast";
@@ -23,6 +24,14 @@ const refreshing = ref(false);
 const actionLoading = ref<"deploy" | "stop" | "restart" | null>(null);
 const errorMessage = ref("");
 
+const settingsOpen = ref(false);
+const settingsLoading = ref(false);
+const settingsSaving = ref(false);
+const rootDirectories = ref<RootDirectoryCandidate[]>([]);
+const selectedRootDirectory = ref("");
+const recommendedRootDirectory = ref("");
+const treeTruncated = ref(false);
+
 const selectedDeploymentId = ref<string | null>(null);
 const deploymentLogs = ref<DeploymentLog[]>([]);
 const logsLoading = ref(false);
@@ -32,6 +41,31 @@ const terminalElement = ref<HTMLElement | null>(null);
 
 let pollingTimer: ReturnType<typeof setInterval> | null = null;
 let logPollingTimer: ReturnType<typeof setInterval> | null = null;
+
+const selectedRootCandidate = computed(() => {
+  return (
+    rootDirectories.value.find(
+      (candidate) => candidate.rootDirectory === selectedRootDirectory.value,
+    ) ?? null
+  );
+});
+
+const rootDirectoryChanged = computed(() => {
+  return (
+    project.value !== null &&
+    selectedRootDirectory.value !== project.value.rootDirectory
+  );
+});
+
+const canSaveRootDirectory = computed(() => {
+  return Boolean(
+    selectedRootCandidate.value?.deployable &&
+      rootDirectoryChanged.value &&
+      !settingsLoading.value &&
+      !settingsSaving.value &&
+      !isDeploymentActive.value,
+  );
+});
 
 const activeStatuses: DeploymentStatus[] = [
   "QUEUED",
@@ -148,6 +182,111 @@ async function refreshDeployments() {
       error,
       "Deployment status could not be refreshed.",
     );
+  }
+}
+
+async function openSettings(): Promise<void> {
+  settingsOpen.value = true;
+  settingsLoading.value = true;
+  errorMessage.value = "";
+
+  try {
+    const result = await api.getProjectRootDirectories(projectId.value);
+
+    rootDirectories.value = result.candidates;
+    recommendedRootDirectory.value = result.recommendedRootDirectory;
+    treeTruncated.value = result.treeTruncated;
+
+    selectedRootDirectory.value =
+      project.value?.rootDirectory ?? result.recommendedRootDirectory;
+  } catch (error) {
+    const message = getRequestError(
+      error,
+      "Root directories could not be loaded.",
+    );
+
+    errorMessage.value = message;
+    toast.error("Settings could not be loaded", message);
+  } finally {
+    settingsLoading.value = false;
+  }
+}
+
+function closeSettings(): void {
+  if (settingsSaving.value) return;
+
+  settingsOpen.value = false;
+  rootDirectories.value = [];
+  selectedRootDirectory.value = "";
+}
+
+async function saveRootDirectory(redeploy: boolean): Promise<void> {
+  if (!canSaveRootDirectory.value || !project.value) {
+    return;
+  }
+
+  settingsSaving.value = true;
+  errorMessage.value = "";
+
+  const toastId = toast.loading(
+    redeploy
+      ? "Saving configuration and creating deployment..."
+      : "Saving project configuration...",
+  );
+
+  try {
+    const updatedProject = await api.updateProjectRootDirectory(
+      projectId.value,
+      selectedRootDirectory.value,
+    );
+
+    project.value = {
+      ...project.value,
+      ...updatedProject,
+    };
+
+    if (redeploy) {
+      const deployment = await api.createDeployment(projectId.value);
+
+      deployments.value = [
+        deployment,
+        ...deployments.value.filter((item) => item.id !== deployment.id),
+      ];
+
+      selectedDeploymentId.value = deployment.id;
+      deploymentLogs.value = [];
+
+      await loadDeploymentLogs(deployment.id);
+
+      startPolling();
+      startLogPolling();
+    }
+
+    toast.dismiss(toastId);
+    toast.success(
+      redeploy
+        ? "Configuration saved and deployment created"
+        : "Configuration saved",
+      redeploy
+        ? `The new deployment will use ./${selectedRootDirectory.value}.`
+        : "Future deployments will use the selected root directory.",
+    );
+
+    closeSettings();
+  } catch (error) {
+    const message = getRequestError(
+      error,
+      redeploy
+        ? "The configuration or deployment could not be completed."
+        : "The project configuration could not be saved.",
+    );
+
+    errorMessage.value = message;
+
+    toast.dismiss(toastId);
+    toast.error("Settings update failed", message);
+  } finally {
+    settingsSaving.value = false;
   }
 }
 
@@ -466,6 +605,15 @@ onBeforeUnmount(() => {
               </div>
             </div>
             <div class="flex flex-wrap gap-3">
+              <button
+                :disabled="actionLoading !== null"
+                class="flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-900 px-4 py-2.5 text-sm font-semibold transition hover:border-cyan-500 hover:text-cyan-300 disabled:opacity-50"
+                type="button"
+                @click="openSettings"
+              >
+                <Icon class="h-4 w-4" icon="mdi:cog-outline" />
+                Settings
+              </button>
               <button
                 :disabled="refreshing || actionLoading !== null"
                 class="flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-900 px-4 py-2.5 text-sm font-semibold transition hover:border-slate-500 disabled:opacity-50"
@@ -801,5 +949,167 @@ onBeforeUnmount(() => {
         </section>
       </template>
     </div>
+    <Teleport to="body">
+      <div
+        v-if="settingsOpen"
+        class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm"
+        @click.self="closeSettings"
+      >
+        <section
+          class="w-full max-w-2xl rounded-2xl border border-slate-700 bg-slate-900 p-6 shadow-2xl sm:p-8"
+        >
+          <div class="flex items-start justify-between gap-4">
+            <div>
+              <p
+                class="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-400"
+              >
+                Project settings
+              </p>
+
+              <h2 class="mt-2 text-2xl font-bold">Root directory</h2>
+
+              <p class="mt-2 text-sm text-slate-400">
+                Choose the directory containing the application that DevPilot
+                should build.
+              </p>
+            </div>
+
+            <button
+              :disabled="settingsSaving"
+              class="rounded-lg p-2 text-slate-400 transition hover:bg-slate-800 hover:text-white disabled:opacity-50"
+              type="button"
+              @click="closeSettings"
+            >
+              <Icon class="h-5 w-5" icon="mdi:close" />
+            </button>
+          </div>
+
+          <div
+            v-if="settingsLoading"
+            class="mt-8 flex items-center justify-center py-12 text-slate-400"
+          >
+            <span
+              class="mr-3 h-5 w-5 animate-spin rounded-full border-2 border-slate-600 border-t-cyan-400"
+            />
+            Inspecting repository directories...
+          </div>
+
+          <div v-else class="mt-8">
+            <label
+              class="text-sm font-semibold text-slate-300"
+              for="root-directory"
+            >
+              Root directory
+            </label>
+
+            <select
+              id="root-directory"
+              v-model="selectedRootDirectory"
+              class="mt-3 w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 font-mono text-sm text-slate-200 outline-none transition focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20"
+            >
+              <option
+                v-for="candidate in rootDirectories"
+                :key="candidate.rootDirectory"
+                :disabled="!candidate.deployable"
+                :value="candidate.rootDirectory"
+              >
+                {{
+                  candidate.rootDirectory === "."
+                    ? "./ — Repository root"
+                    : `./${candidate.rootDirectory}`
+                }}
+                {{
+                  candidate.rootDirectory === recommendedRootDirectory
+                    ? " — Recommended"
+                    : ""
+                }}
+                {{ !candidate.deployable ? " — No project detected" : "" }}
+              </option>
+            </select>
+
+            <div
+              v-if="selectedRootCandidate"
+              :class="
+                selectedRootCandidate.deployable
+                  ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200'
+                  : 'border-amber-500/20 bg-amber-500/10 text-amber-200'
+              "
+              class="mt-4 rounded-xl border p-4 text-sm"
+            >
+              <p class="font-semibold">
+                {{
+                  selectedRootCandidate.deployable
+                    ? "Deployable project detected"
+                    : "No supported project detected"
+                }}
+              </p>
+
+              <p
+                v-if="selectedRootCandidate.deployable"
+                class="mt-1 opacity-80"
+              >
+                Framework:
+                {{ selectedRootCandidate.framework ?? "Unknown" }}
+                · Package manager:
+                {{ selectedRootCandidate.packageManager ?? "Unknown" }}
+              </p>
+
+              <p
+                v-if="selectedRootCandidate.markers.length"
+                class="mt-2 font-mono text-xs opacity-70"
+              >
+                {{ selectedRootCandidate.markers.join(", ") }}
+              </p>
+            </div>
+
+            <p v-if="treeTruncated" class="mt-3 text-xs text-amber-300">
+              GitHub returned a truncated repository tree. Some deeply nested
+              directories may be unavailable.
+            </p>
+
+            <p class="mt-4 text-xs text-slate-500">
+              Changing this setting affects future deployments only. Previous
+              deployment history will remain unchanged.
+            </p>
+
+            <p v-if="isDeploymentActive" class="mt-3 text-xs text-amber-300">
+              Wait for the active deployment to finish before changing the root
+              directory.
+            </p>
+
+            <div
+              class="mt-8 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end"
+            >
+              <button
+                :disabled="settingsSaving"
+                class="rounded-xl border border-slate-700 px-5 py-2.5 text-sm font-semibold transition hover:border-slate-500 disabled:opacity-50"
+                type="button"
+                @click="closeSettings"
+              >
+                Cancel
+              </button>
+
+              <button
+                :disabled="!canSaveRootDirectory"
+                class="rounded-xl border border-cyan-500/40 bg-cyan-500/10 px-5 py-2.5 text-sm font-semibold text-cyan-300 transition hover:bg-cyan-500/20 disabled:opacity-50"
+                type="button"
+                @click="saveRootDirectory(false)"
+              >
+                Save changes
+              </button>
+
+              <button
+                :disabled="!canSaveRootDirectory"
+                class="rounded-xl bg-cyan-400 px-5 py-2.5 text-sm font-bold text-slate-950 transition hover:bg-cyan-300 disabled:opacity-50"
+                type="button"
+                @click="saveRootDirectory(true)"
+              >
+                {{ settingsSaving ? "Saving..." : "Save & redeploy" }}
+              </button>
+            </div>
+          </div>
+        </section>
+      </div>
+    </Teleport>
   </main>
 </template>
