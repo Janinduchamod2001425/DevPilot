@@ -9,6 +9,7 @@ import type {
   ImportProjectResponse,
   LogoutResponse,
   Project,
+  RootDirectoriesResponse,
 } from "~/types/api";
 
 export function useDevPilotApi() {
@@ -175,6 +176,21 @@ export function useDevPilotApi() {
     });
   }
 
+  function getRepositoryRootDirectories(
+    installationId: string,
+    repositoryId: string,
+  ): Promise<RootDirectoriesResponse> {
+    return api<RootDirectoriesResponse>(
+      "/github/repositories/root-directories",
+      {
+        query: {
+          installationId,
+          repositoryId,
+        },
+      },
+    );
+  }
+
   function importProject(
     payload: ImportProjectPayload,
   ): Promise<ImportProjectResponse> {
@@ -184,11 +200,33 @@ export function useDevPilotApi() {
     });
   }
 
+  function getProjectRootDirectories(
+    projectId: string,
+  ): Promise<RootDirectoriesResponse> {
+    return api<RootDirectoriesResponse>(
+      `/projects/${projectId}/root-directories`,
+    );
+  }
+
+  function updateProjectRootDirectory(
+    projectId: string,
+    rootDirectory: string,
+  ): Promise<Project> {
+    return api<Project>(`/projects/${projectId}/root-directory`, {
+      method: "PATCH",
+      body: {
+        rootDirectory,
+      },
+    });
+  }
+
   return {
     getHealth,
     getProjects,
     getProject,
     getProjectDeployments,
+    getProjectRootDirectories,
+    updateProjectRootDirectory,
     getDeployment,
     getDeploymentLogs,
     createDeployment,
@@ -198,11 +236,11 @@ export function useDevPilotApi() {
     logout,
     getGitHubLoginUrl,
     loginWithGitHub,
-
     getGitHubInstallUrl,
     installGitHubApp,
     getGitHubInstallations,
     getGitHubRepositories,
+    getRepositoryRootDirectories,
     importProject,
   };
 }
