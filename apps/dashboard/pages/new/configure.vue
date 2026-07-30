@@ -1,6 +1,6 @@
 <script lang="ts" setup>
 import { Icon } from "@iconify/vue";
-import type { GitHubRepository } from "~/types/api";
+import type { GitHubRepository, RootDirectoryCandidate } from "~/types/api";
 import { useAppToast } from "~/composables/useAppToast";
 
 const route = useRoute();
@@ -8,9 +8,31 @@ const api = useDevPilotApi();
 const toast = useAppToast();
 
 const repository = ref<GitHubRepository | null>(null);
+const rootDirectories = ref<RootDirectoryCandidate[]>([]);
+const selectedRootDirectory = ref("");
+const recommendedRootDirectory = ref("");
+const treeTruncated = ref(false);
 const loading = ref(true);
 const importing = ref(false);
 const errorMessage = ref("");
+
+const selectedCandidate = computed(() => {
+  return (
+    rootDirectories.value.find(
+      (candidate) => candidate.rootDirectory === selectedRootDirectory.value,
+    ) ?? null
+  );
+});
+
+const canImport = computed(() => {
+  return Boolean(
+    repository.value &&
+      hasValidSelection.value &&
+      selectedCandidate.value?.deployable &&
+      !loading.value &&
+      !importing.value,
+  );
+});
 
 const installationId = computed(() => {
   const value = route.query.installationId;
@@ -61,22 +83,37 @@ async function loadRepository(): Promise<void> {
   }
 
   try {
-    const result = await api.getGitHubRepositories(installationId.value);
+    const [repositoriesResult, rootResult] = await Promise.all([
+      api.getGitHubRepositories(installationId.value),
+      api.getRepositoryRootDirectories(
+        installationId.value,
+        repositoryId.value,
+      ),
+    ]);
 
     repository.value =
-      result.repositories.find(
+      repositoriesResult.repositories.find(
         (item) => String(item.id) === repositoryId.value,
       ) ?? null;
 
     if (!repository.value) {
-      errorMessage.value =
-        "This repository is no longer available through the selected GitHub account.";
+      throw new Error(
+        "This repository is no longer available through the selected GitHub account.",
+      );
     }
+
+    rootDirectories.value = rootResult.candidates;
+    recommendedRootDirectory.value = rootResult.recommendedRootDirectory;
+    selectedRootDirectory.value = rootResult.recommendedRootDirectory;
+    treeTruncated.value = rootResult.treeTruncated;
   } catch (error) {
     errorMessage.value = getRequestError(
       error,
-      "The selected repository could not be loaded.",
+      error instanceof Error
+        ? error.message
+        : "The selected repository could not be loaded.",
     );
+
     toast.error("Repository could not be loaded", errorMessage.value);
   } finally {
     loading.value = false;
@@ -84,7 +121,14 @@ async function loadRepository(): Promise<void> {
 }
 
 async function importProject(): Promise<void> {
-  if (!repository.value || !hasValidSelection.value || importing.value) {
+  if (!canImport.value) {
+    if (!selectedCandidate.value?.deployable) {
+      toast.error(
+        "Invalid root directory",
+        "Select a directory containing a supported project.",
+      );
+    }
+
     return;
   }
 
@@ -97,6 +141,7 @@ async function importProject(): Promise<void> {
     const result = await api.importProject({
       installationId: installationId.value,
       repositoryId: repositoryId.value,
+      rootDirectory: selectedRootDirectory.value,
     });
 
     toast.dismiss(toastId);
@@ -249,14 +294,96 @@ onMounted(() => {
                 {{ repository.defaultBranch }}
               </dd>
             </div>
-            <div class="bg-slate-950/60 p-5">
+            <div class="bg-slate-950/60 p-5 sm:col-span-2">
               <dt
                 class="text-xs font-semibold uppercase tracking-wider text-slate-500"
               >
                 Root directory
               </dt>
-              <dd class="mt-2 font-mono text-sm font-semibold text-slate-200">
-                .
+
+              <dd class="mt-3">
+                <select
+                  v-model="selectedRootDirectory"
+                  class="w-full rounded-xl border border-slate-700 bg-slate-900 px-4 py-3 font-mono text-sm text-slate-200 outline-none transition focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20"
+                >
+                  <option
+                    v-for="candidate in rootDirectories"
+                    :key="candidate.rootDirectory"
+                    :value="candidate.rootDirectory"
+                  >
+                    {{
+                      candidate.rootDirectory === "."
+                        ? "./ — Repository root"
+                        : `./${candidate.rootDirectory}`
+                    }}
+                    {{
+                      candidate.rootDirectory === recommendedRootDirectory
+                        ? " — Recommended"
+                        : ""
+                    }}
+                    {{ !candidate.deployable ? " — No project detected" : "" }}
+                  </option>
+                </select>
+
+                <div
+                  v-if="selectedCandidate"
+                  :class="
+                    selectedCandidate.deployable
+                      ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200'
+                      : 'border-amber-500/20 bg-amber-500/10 text-amber-200'
+                  "
+                  class="mt-3 rounded-xl border px-4 py-3 text-sm"
+                >
+                  <div class="flex items-start gap-3">
+                    <Icon
+                      :icon="
+                        selectedCandidate.deployable
+                          ? 'mdi:check-circle-outline'
+                          : 'mdi:alert-outline'
+                      "
+                      class="mt-0.5 h-5 w-5 shrink-0"
+                    />
+
+                    <div>
+                      <p class="font-semibold">
+                        {{
+                          selectedCandidate.deployable
+                            ? "Deployable project detected"
+                            : "No supported project detected"
+                        }}
+                      </p>
+
+                      <p
+                        v-if="selectedCandidate.deployable"
+                        class="mt-1 opacity-80"
+                      >
+                        Framework:
+                        {{ selectedCandidate.framework ?? "Unknown" }}
+                        · Package manager:
+                        {{ selectedCandidate.packageManager ?? "Unknown" }}
+                      </p>
+
+                      <p
+                        v-if="selectedCandidate.markers.length"
+                        class="mt-1 font-mono text-xs opacity-70"
+                      >
+                        {{ selectedCandidate.markers.join(", ") }}
+                      </p>
+
+                      <p
+                        v-if="!selectedCandidate.deployable"
+                        class="mt-1 opacity-80"
+                      >
+                        Choose another directory before importing this project.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <p v-if="treeTruncated" class="mt-3 text-xs text-amber-300">
+                  GitHub returned a truncated repository tree. Some deeply
+                  nested directories may not be displayed.
+                </p>
               </dd>
             </div>
             <div class="bg-slate-950/60 p-5">
@@ -293,7 +420,13 @@ onMounted(() => {
               :icon="importing ? 'mdi:loading' : 'mdi:rocket-launch-outline'"
               class="h-5 w-5"
             />
-            {{ importing ? "Importing..." : "Import & deploy" }}
+            {{
+              importing
+                ? "Importing..."
+                : selectedCandidate?.deployable
+                  ? "Import & deploy"
+                  : "Select a valid directory"
+            }}
           </button>
         </section>
 
