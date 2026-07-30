@@ -125,9 +125,30 @@ export interface GitHubRepositoriesResponse {
   repositories: GitHubRepository[];
 }
 
+export interface RootDirectoryCandidate {
+  rootDirectory: string;
+  deployable: boolean;
+  framework: string | null;
+  packageManager: string | null;
+  markers: string[];
+}
+
+export interface RootDirectoriesResponse {
+  repository: {
+    id: string;
+    name: string;
+    fullName: string;
+    defaultBranch: string;
+  };
+  recommendedRootDirectory: string;
+  candidates: RootDirectoryCandidate[];
+  treeTruncated: boolean;
+}
+
 export interface ImportProjectPayload {
   installationId: string;
   repositoryId: string;
+  rootDirectory: string;
 }
 
 export interface ImportProjectResponse {
