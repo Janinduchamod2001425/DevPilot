@@ -26,6 +26,30 @@ export class ProjectsService {
 
     const { repository, installation } = authorized;
 
+    const rootDirectory = this.normalizeRootDirectory(dto.rootDirectory);
+
+    const rootDetection = await this.githubService.detectRootDirectories(
+      userId,
+      dto.installationId,
+      dto.repositoryId,
+    );
+
+    const selectedCandidate = rootDetection.candidates.find(
+      (candidate) => candidate.rootDirectory === rootDirectory,
+    );
+
+    if (!selectedCandidate) {
+      throw new BadRequestException(
+        "The selected root directory was not found in this repository",
+      );
+    }
+
+    if (!selectedCandidate.deployable) {
+      throw new BadRequestException(
+        `The selected root directory "${rootDirectory}" does not contain a supported project`,
+      );
+    }
+
     const existingProject = await this.prismaService.client.project.findFirst({
       where: {
         userId,
@@ -61,7 +85,7 @@ export class ProjectsService {
         repositoryUrl: repository.cloneUrl,
         repositoryId: repository.id,
         productionBranch: repository.defaultBranch,
-        rootDirectory: ".",
+        rootDirectory,
         userId,
         githubInstallationId: installation.id,
       },
@@ -249,31 +273,52 @@ export class ProjectsService {
     });
   }
 
+  async findRootDirectories(userId: string, projectId: string) {
+    const project = await this.prismaService.client.project.findFirst({
+      where: {
+        id: projectId,
+        userId,
+      },
+      select: {
+        id: true,
+        repositoryId: true,
+        githubInstallationId: true,
+      },
+    });
+
+    if (!project) {
+      throw new NotFoundException(`Project ${projectId} was not found`);
+    }
+
+    if (!project.githubInstallationId) {
+      throw new BadRequestException(
+        "This project is not connected to a GitHub installation",
+      );
+    }
+
+    if (!project.repositoryId) {
+      throw new BadRequestException(
+        "This project is not connected to a GitHub repository",
+      );
+    }
+
+    return this.githubService.detectRootDirectories(
+      userId,
+      project.githubInstallationId,
+      project.repositoryId,
+    );
+  }
+
   async updateRootDirectory(
     userId: string,
     projectId: string,
     rootDirectory: unknown,
   ) {
-    if (typeof rootDirectory !== "string" || !rootDirectory.trim()) {
-      throw new BadRequestException("rootDirectory must be a non-empty string");
+    if (typeof rootDirectory !== "string") {
+      throw new BadRequestException("rootDirectory must be a string");
     }
 
-    const normalizedRootDirectory = rootDirectory
-      .trim()
-      .replaceAll("\\", "/")
-      .replace(/\/+/g, "/")
-      .replace(/\/$/, "");
-
-    // Prevent absolute paths and directory traversal.
-    if (
-      normalizedRootDirectory.startsWith("/") ||
-      /^[a-zA-Z]:\//.test(normalizedRootDirectory) ||
-      normalizedRootDirectory.split("/").some((segment) => segment === "..")
-    ) {
-      throw new BadRequestException(
-        "rootDirectory must be a safe path inside the repository",
-      );
-    }
+    const normalizedRootDirectory = this.normalizeRootDirectory(rootDirectory);
 
     const project = await this.prismaService.client.project.findFirst({
       where: {
@@ -282,11 +327,67 @@ export class ProjectsService {
       },
       select: {
         id: true,
+        name: true,
+        rootDirectory: true,
+        repositoryId: true,
+        githubInstallationId: true,
       },
     });
 
     if (!project) {
       throw new NotFoundException(`Project ${projectId} was not found`);
+    }
+
+    if (!project.githubInstallationId) {
+      throw new BadRequestException(
+        "This project is not connected to a GitHub installation",
+      );
+    }
+
+    if (!project.repositoryId) {
+      throw new BadRequestException(
+        "This project is not connected to a GitHub repository",
+      );
+    }
+
+    const rootDetection = await this.githubService.detectRootDirectories(
+      userId,
+      project.githubInstallationId,
+      project.repositoryId,
+    );
+
+    const selectedCandidate = rootDetection.candidates.find(
+      (candidate) => candidate.rootDirectory === normalizedRootDirectory,
+    );
+
+    if (!selectedCandidate) {
+      throw new BadRequestException(
+        "The selected root directory was not found in this repository",
+      );
+    }
+
+    if (!selectedCandidate.deployable) {
+      throw new BadRequestException(
+        `The selected root directory "${normalizedRootDirectory}" does not contain a supported project`,
+      );
+    }
+
+    if (project.rootDirectory === normalizedRootDirectory) {
+      return this.prismaService.client.project.findUniqueOrThrow({
+        where: {
+          id: project.id,
+        },
+        select: {
+          id: true,
+          name: true,
+          slug: true,
+          repositoryOwner: true,
+          repositoryName: true,
+          productionBranch: true,
+          rootDirectory: true,
+          updatedAt: true,
+        },
+      });
     }
 
     return this.prismaService.client.project.update({
@@ -307,6 +408,31 @@ export class ProjectsService {
         updatedAt: true,
       },
     });
+  }
+
+  private normalizeRootDirectory(rootDirectory: string): string {
+    const normalized = rootDirectory
+      .trim()
+      .replaceAll("\\", "/")
+      .replace(/\/+/g, "/")
+      .replace(/^\.\/+/, "")
+      .replace(/\/$/, "");
+
+    const resolvedDirectory = normalized || ".";
+
+    if (
+      resolvedDirectory.startsWith("/") ||
+      /^[a-zA-Z]:\//.test(resolvedDirectory) ||
+      resolvedDirectory
+        .split("/")
+        .some((segment) => segment === ".." || segment === "")
+    ) {
+      throw new BadRequestException(
+        "rootDirectory must be a safe path inside the repository",
+      );
+    }
+
+    return resolvedDirectory;
   }
 
   private async createUniqueSlug(
