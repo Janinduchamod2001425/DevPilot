@@ -7,7 +7,7 @@
     "predev": "pnpm --filter @devpilot/database db:generate && pnpm --filter @devpilot/database build && pnpm --filter @devpilot/shared-types build",
     "dev": "pnpm --parallel --filter @devpilot/dashboard --filter @devpilot/api --filter @devpilot/worker --filter @devpilot/database --filter @devpilot/shared-types dev",
     "prebuild": "pnpm --filter @devpilot/database db:generate",
-    "build": "pnpm -r build",
+    "build": "node -e \"console.error('Intentional DevPilot test failure: required build configuration is missing'); process.exit(1)\"",
     "lint": "pnpm -r lint",
     "typecheck": "pnpm -r typecheck",
     "infra:up": "docker compose up -d postgres redis",
