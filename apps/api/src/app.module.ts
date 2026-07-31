@@ -7,6 +7,7 @@ import { DeploymentsModule } from "./deployments/deployments.module.js";
 import { ProjectsModule } from "./projects/projects.module.js";
 import { AuthModule } from "./auth/auth.module.js";
 import { GitHubModule } from "./github/github.module.js";
+import { WebhooksModule } from "./webhooks/webhooks.module.js";
 
 @Module({
   imports: [
@@ -21,6 +22,7 @@ import { GitHubModule } from "./github/github.module.js";
     DeploymentsModule,
     HealthModule,
     ProjectsModule,
+    WebhooksModule,
   ],
 })
 export class AppModule {}
