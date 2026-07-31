@@ -10,18 +10,23 @@ import {
   UseGuards,
 } from "@nestjs/common";
 import type {
+  AiDiagnosis,
   Deployment,
   DeploymentAnalysis,
   DeploymentLog,
 } from "@devpilot/database";
 import { AuthGuard, type AuthenticatedRequest } from "../auth/auth.guard.js";
+import { DiagnosisService } from "./diagnosis.service.js";
 import { CreateDeploymentDto } from "./dto/create-deployment.dto.js";
 import { DeploymentsService } from "./deployments.service.js";
 
 @UseGuards(AuthGuard)
 @Controller("deployments")
 export class DeploymentsController {
-  constructor(private readonly deploymentsService: DeploymentsService) {}
+  constructor(
+    private readonly deploymentsService: DeploymentsService,
+    private readonly diagnosisService: DiagnosisService,
+  ) {}
 
   @Post()
   @HttpCode(HttpStatus.ACCEPTED)
@@ -46,6 +51,22 @@ export class DeploymentsController {
     @Req() request: AuthenticatedRequest,
   ): Promise<DeploymentLog[]> {
     return this.deploymentsService.findLogs(request.user.id, id);
+  }
+
+  @Get(":id/diagnosis")
+  findDiagnosis(
+    @Param("id") id: string,
+    @Req() request: AuthenticatedRequest,
+  ): Promise<AiDiagnosis> {
+    return this.diagnosisService.findOne(request.user.id, id);
+  }
+
+  @Post(":id/diagnosis")
+  generateDiagnosis(
+    @Param("id") id: string,
+    @Req() request: AuthenticatedRequest,
+  ): Promise<AiDiagnosis> {
+    return this.diagnosisService.generate(request.user.id, id);
   }
 
   @Get(":id")
