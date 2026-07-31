@@ -40,7 +40,7 @@ export class DiagnosisService {
 
     this.diagnosisModel =
       this.configService.get<string>("GEMINI_DIAGNOSIS_MODEL") ??
-      "gemini-2.5-flash";
+      "gemini-3.5-flash-lite";
 
     this.geminiClient = new GoogleGenAI({
       apiKey,
