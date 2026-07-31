@@ -42,6 +42,12 @@ const terminalElement = ref<HTMLElement | null>(null);
 let pollingTimer: ReturnType<typeof setInterval> | null = null;
 let logPollingTimer: ReturnType<typeof setInterval> | null = null;
 
+let discoveryPollingTimer: ReturnType<typeof setInterval> | null = null;
+let deploymentsRefreshInProgress = false;
+
+const ACTIVE_POLL_INTERVAL = 2000;
+const DISCOVERY_POLL_INTERVAL = 5000;
+
 const selectedRootCandidate = computed(() => {
   return (
     rootDirectories.value.find(
@@ -172,9 +178,35 @@ async function loadProject(
   }
 }
 
-async function refreshDeployments() {
+async function refreshDeployments(): Promise<void> {
+  if (deploymentsRefreshInProgress || (import.meta.client && document.hidden)) {
+    return;
+  }
+
+  deploymentsRefreshInProgress = true;
+
   try {
-    deployments.value = await api.getProjectDeployments(projectId.value);
+    const previousLatestId = deployments.value[0]?.id ?? null;
+    const updatedDeployments = await api.getProjectDeployments(projectId.value);
+
+    deployments.value = updatedDeployments;
+
+    const newLatestDeployment = updatedDeployments[0] ?? null;
+    const webhookDeploymentDiscovered =
+      newLatestDeployment !== null &&
+      newLatestDeployment.id !== previousLatestId;
+
+    if (project.value) {
+      project.value._count.deployments = updatedDeployments.length;
+    }
+
+    if (webhookDeploymentDiscovered) {
+      selectedDeploymentId.value = newLatestDeployment.id;
+      deploymentLogs.value = [];
+
+      await loadDeploymentLogs(newLatestDeployment.id, false);
+    }
+
     updatePolling();
     updateLogPolling();
   } catch (error) {
@@ -182,6 +214,8 @@ async function refreshDeployments() {
       error,
       "Deployment status could not be refreshed.",
     );
+  } finally {
+    deploymentsRefreshInProgress = false;
   }
 }
 
@@ -406,11 +440,12 @@ function replaceDeployment(updated: Deployment) {
   else deployments.value[idx] = updated;
 }
 
-function startPolling() {
-  if (pollingTimer) return;
+function startPolling(): void {
+  if (pollingTimer || document.hidden) return;
+
   pollingTimer = setInterval(() => {
     void refreshDeployments();
-  }, 2000);
+  }, ACTIVE_POLL_INTERVAL);
 }
 function stopPolling() {
   if (pollingTimer) {
@@ -422,6 +457,33 @@ function updatePolling() {
   if (isDeploymentActive.value || actionLoading.value === "stop")
     startPolling();
   else stopPolling();
+}
+
+function startDiscoveryPolling(): void {
+  if (discoveryPollingTimer || document.hidden) return;
+
+  discoveryPollingTimer = setInterval(() => {
+    void refreshDeployments();
+  }, DISCOVERY_POLL_INTERVAL);
+}
+
+function stopDiscoveryPolling(): void {
+  if (!discoveryPollingTimer) return;
+
+  clearInterval(discoveryPollingTimer);
+  discoveryPollingTimer = null;
+}
+
+function handleVisibilityChange(): void {
+  if (document.hidden) {
+    stopPolling();
+    stopLogPolling();
+    stopDiscoveryPolling();
+    return;
+  }
+
+  void refreshDeployments();
+  startDiscoveryPolling();
 }
 
 async function loadDeploymentLogs(deploymentId: string, showLoader = true) {
@@ -520,10 +582,17 @@ function shortCommit(sha: string | null) {
 
 onMounted(() => {
   void loadProject();
+  startDiscoveryPolling();
+
+  document.addEventListener("visibilitychange", handleVisibilityChange);
 });
+
 onBeforeUnmount(() => {
   stopPolling();
   stopLogPolling();
+  stopDiscoveryPolling();
+
+  document.removeEventListener("visibilitychange", handleVisibilityChange);
 });
 </script>
 

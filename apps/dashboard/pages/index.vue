@@ -11,6 +11,11 @@ const loading = ref(true);
 const errorMessage = ref("");
 const apiConnected = ref(false);
 
+let dashboardPollingTimer: ReturnType<typeof setInterval> | null = null;
+let dashboardRefreshInProgress = false;
+
+const DASHBOARD_POLL_INTERVAL = 5000;
+
 async function loadDashboard(showSuccessToast = false): Promise<void> {
   loading.value = true;
   errorMessage.value = "";
@@ -60,8 +65,72 @@ function formatDate(value: string) {
   }).format(new Date(value));
 }
 
+async function refreshDashboardSilently(): Promise<void> {
+  if (dashboardRefreshInProgress || (import.meta.client && document.hidden)) {
+    return;
+  }
+
+  dashboardRefreshInProgress = true;
+
+  try {
+    const [healthResult, projectsResult] = await Promise.allSettled([
+      api.getHealth(),
+      api.getProjects(),
+    ]);
+
+    apiConnected.value = healthResult.status === "fulfilled";
+
+    if (projectsResult.status === "fulfilled") {
+      projects.value = projectsResult.value;
+      errorMessage.value = "";
+    }
+  } finally {
+    dashboardRefreshInProgress = false;
+  }
+}
+
+function startDashboardPolling(): void {
+  if (dashboardPollingTimer) return;
+
+  dashboardPollingTimer = setInterval(() => {
+    void refreshDashboardSilently();
+  }, DASHBOARD_POLL_INTERVAL);
+}
+
+function stopDashboardPolling(): void {
+  if (!dashboardPollingTimer) return;
+
+  clearInterval(dashboardPollingTimer);
+  dashboardPollingTimer = null;
+}
+
+function handleDashboardVisibilityChange(): void {
+  if (document.hidden) {
+    stopDashboardPolling();
+    return;
+  }
+
+  void refreshDashboardSilently();
+  startDashboardPolling();
+}
+
 onMounted(() => {
   void loadDashboard();
+  startDashboardPolling();
+
+  document.addEventListener(
+    "visibilitychange",
+    handleDashboardVisibilityChange,
+  );
+});
+
+onBeforeUnmount(() => {
+  stopDashboardPolling();
+
+  document.removeEventListener(
+    "visibilitychange",
+    handleDashboardVisibilityChange,
+  );
 });
 </script>
 
