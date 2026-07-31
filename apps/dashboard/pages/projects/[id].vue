@@ -10,8 +10,28 @@ import type {
 import { Icon } from "@iconify/vue";
 import { useAppToast } from "~/composables/useAppToast";
 
+type AiDiagnosisStatus = "PENDING" | "COMPLETED" | "FAILED";
+
+interface AiDiagnosis {
+  id: string;
+  deploymentId: string;
+  status: AiDiagnosisStatus;
+  failureSummary: string | null;
+  likelyRootCause: string | null;
+  relevantLogLines: string[];
+  recommendedFixes: string[];
+  confidence: number | null;
+  provider: string;
+  model: string;
+  errorMessage: string | null;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+}
+
 const route = useRoute();
 const api = useDevPilotApi();
+const runtimeConfig = useRuntimeConfig();
 
 const toast = useAppToast();
 
@@ -38,6 +58,11 @@ const logsLoading = ref(false);
 const logsRefreshing = ref(false);
 const logsErrorMessage = ref("");
 const terminalElement = ref<HTMLElement | null>(null);
+const diagnosis = ref<AiDiagnosis | null>(null);
+const diagnosisLoading = ref(false);
+const diagnosisGenerating = ref(false);
+const diagnosisErrorMessage = ref("");
+const diagnosisCheckedDeploymentId = ref<string | null>(null);
 
 let pollingTimer: ReturnType<typeof setInterval> | null = null;
 let logPollingTimer: ReturnType<typeof setInterval> | null = null;
@@ -122,6 +147,31 @@ function getRequestError(error: unknown, fallback: string): string {
   return Array.isArray(msg) ? msg.join(", ") : (msg ?? e.message ?? fallback);
 }
 
+function getRequestStatus(error: unknown): number | undefined {
+  if (typeof error !== "object" || error === null) return undefined;
+  const requestError = error as {
+    status?: number;
+    statusCode?: number;
+    response?: { status?: number };
+  };
+  return (
+    requestError.status ??
+    requestError.statusCode ??
+    requestError.response?.status
+  );
+}
+
+function diagnosisRequest(
+  deploymentId: string,
+  method: "GET" | "POST",
+): Promise<AiDiagnosis> {
+  return $fetch<AiDiagnosis>(`/deployments/${deploymentId}/diagnosis`, {
+    baseURL: runtimeConfig.public.apiBaseUrl,
+    method,
+    credentials: "include",
+  });
+}
+
 async function loadProject(
   showLoader = true,
   showSuccessToast = false,
@@ -153,7 +203,10 @@ async function loadProject(
     }
 
     if (selectedDeploymentId.value) {
-      await loadDeploymentLogs(selectedDeploymentId.value);
+      await Promise.all([
+        loadDeploymentLogs(selectedDeploymentId.value),
+        loadDiagnosis(selectedDeploymentId.value),
+      ]);
     }
 
     updatePolling();
@@ -203,8 +256,17 @@ async function refreshDeployments(): Promise<void> {
     if (webhookDeploymentDiscovered) {
       selectedDeploymentId.value = newLatestDeployment.id;
       deploymentLogs.value = [];
+      resetDiagnosis();
 
-      await loadDeploymentLogs(newLatestDeployment.id, false);
+      await Promise.all([
+        loadDeploymentLogs(newLatestDeployment.id, false),
+        loadDiagnosis(newLatestDeployment.id),
+      ]);
+    } else if (
+      selectedDeployment.value?.status === "FAILED" &&
+      diagnosisCheckedDeploymentId.value !== selectedDeployment.value.id
+    ) {
+      await loadDiagnosis(selectedDeployment.value.id);
     }
 
     updatePolling();
@@ -289,6 +351,7 @@ async function saveRootDirectory(redeploy: boolean): Promise<void> {
 
       selectedDeploymentId.value = deployment.id;
       deploymentLogs.value = [];
+      resetDiagnosis();
 
       await loadDeploymentLogs(deployment.id);
 
@@ -342,6 +405,7 @@ async function deployProject(): Promise<void> {
 
     selectedDeploymentId.value = deployment.id;
     deploymentLogs.value = [];
+    resetDiagnosis();
 
     await loadDeploymentLogs(deployment.id);
 
@@ -413,6 +477,7 @@ async function restartLatestDeployment(): Promise<void> {
 
     replaceDeployment(updated);
     selectedDeploymentId.value = updated.id;
+    resetDiagnosis();
 
     await loadDeploymentLogs(updated.id, false);
 
@@ -521,8 +586,93 @@ async function selectDeployment(deploymentId: string) {
   selectedDeploymentId.value = deploymentId;
   deploymentLogs.value = [];
   logsErrorMessage.value = "";
-  await loadDeploymentLogs(deploymentId);
+  resetDiagnosis();
+  await Promise.all([
+    loadDeploymentLogs(deploymentId),
+    loadDiagnosis(deploymentId),
+  ]);
   updateLogPolling();
+}
+
+function resetDiagnosis(): void {
+  diagnosis.value = null;
+  diagnosisErrorMessage.value = "";
+  diagnosisCheckedDeploymentId.value = null;
+}
+
+async function loadDiagnosis(deploymentId: string): Promise<void> {
+  const deployment = deployments.value.find((item) => item.id === deploymentId);
+
+  if (!deployment || deployment.status !== "FAILED") {
+    if (selectedDeploymentId.value === deploymentId) resetDiagnosis();
+    return;
+  }
+
+  diagnosisLoading.value = true;
+  diagnosisErrorMessage.value = "";
+  diagnosisCheckedDeploymentId.value = deploymentId;
+
+  try {
+    const result = await diagnosisRequest(deploymentId, "GET");
+    if (selectedDeploymentId.value === deploymentId) diagnosis.value = result;
+  } catch (error) {
+    if (selectedDeploymentId.value !== deploymentId) return;
+
+    if (getRequestStatus(error) === 404) {
+      diagnosis.value = null;
+      return;
+    }
+
+    diagnosisErrorMessage.value = getRequestError(
+      error,
+      "The saved AI diagnosis could not be loaded.",
+    );
+  } finally {
+    if (selectedDeploymentId.value === deploymentId) {
+      diagnosisLoading.value = false;
+    }
+  }
+}
+
+async function generateDiagnosis(): Promise<void> {
+  const deployment = selectedDeployment.value;
+  if (
+    !deployment ||
+    deployment.status !== "FAILED" ||
+    diagnosisGenerating.value
+  )
+    return;
+
+  diagnosisGenerating.value = true;
+  diagnosisErrorMessage.value = "";
+  const toastId = toast.loading(
+    diagnosis.value
+      ? "Regenerating AI failure analysis..."
+      : "Generating AI failure analysis...",
+  );
+
+  try {
+    diagnosis.value = await diagnosisRequest(deployment.id, "POST");
+    diagnosisCheckedDeploymentId.value = deployment.id;
+    toast.dismiss(toastId);
+    toast.success(
+      "AI failure analysis ready",
+      "DevPilot analyzed the failure and prepared recommended fixes.",
+    );
+  } catch (error) {
+    diagnosisErrorMessage.value = getRequestError(
+      error,
+      "The AI failure analysis could not be generated.",
+    );
+    toast.dismiss(toastId);
+    toast.error("AI analysis failed", diagnosisErrorMessage.value);
+  } finally {
+    diagnosisGenerating.value = false;
+  }
+}
+
+function confidencePercent(value: number | null): string {
+  return value === null ? "—" : `${Math.round(value * 100)}%`;
 }
 
 function startLogPolling() {
@@ -923,6 +1073,225 @@ onBeforeUnmount(() => {
                 >
               </div>
             </div>
+          </div>
+        </section>
+
+        <!-- AI Failure Analysis -->
+        <section
+          v-if="selectedDeployment?.status === 'FAILED'"
+          class="mt-8 overflow-hidden rounded-2xl border border-violet-500/30 bg-slate-900/60 backdrop-blur-sm"
+        >
+          <div
+            class="flex flex-col gap-4 border-b border-slate-800 bg-gradient-to-r from-violet-500/10 to-cyan-500/5 px-6 py-5 sm:flex-row sm:items-center sm:justify-between"
+          >
+            <div class="flex items-start gap-3">
+              <div class="rounded-xl bg-violet-500/15 p-2.5 text-violet-300">
+                <Icon class="h-6 w-6" icon="mdi:brain" />
+              </div>
+              <div>
+                <p
+                  class="text-xs font-semibold uppercase tracking-[0.2em] text-violet-300"
+                >
+                  Gemini powered
+                </p>
+                <h2 class="mt-1 text-xl font-bold text-white">
+                  AI Failure Analysis
+                </h2>
+                <p class="mt-1 text-sm text-slate-400">
+                  Analyze the stored deployment logs and get practical recovery
+                  steps.
+                </p>
+              </div>
+            </div>
+
+            <button
+              :disabled="diagnosisGenerating || diagnosisLoading"
+              class="inline-flex items-center justify-center gap-2 rounded-xl bg-violet-400 px-4 py-2.5 text-sm font-bold text-slate-950 transition hover:bg-violet-300 disabled:cursor-not-allowed disabled:opacity-50"
+              type="button"
+              @click="generateDiagnosis"
+            >
+              <span
+                v-if="diagnosisGenerating"
+                class="h-4 w-4 animate-spin rounded-full border-2 border-slate-700 border-t-transparent"
+              />
+              <Icon
+                v-else
+                :icon="diagnosis ? 'mdi:refresh' : 'mdi:creation'"
+                class="h-4 w-4"
+              />
+              {{
+                diagnosisGenerating
+                  ? "Analyzing failure…"
+                  : diagnosis
+                    ? "Regenerate analysis"
+                    : "Generate AI analysis"
+              }}
+            </button>
+          </div>
+
+          <div v-if="diagnosisLoading" class="space-y-4 p-6">
+            <div class="h-24 animate-pulse rounded-xl bg-slate-800/70" />
+            <div class="h-32 animate-pulse rounded-xl bg-slate-800/70" />
+          </div>
+
+          <div v-else-if="diagnosisErrorMessage" class="p-6">
+            <div
+              class="rounded-xl border border-rose-500/30 bg-rose-500/10 p-4 text-rose-200"
+            >
+              <p class="font-semibold">AI analysis unavailable</p>
+              <p class="mt-1 text-sm text-rose-300">
+                {{ diagnosisErrorMessage }}
+              </p>
+            </div>
+          </div>
+
+          <div v-else-if="!diagnosis" class="px-6 py-10 text-center">
+            <Icon
+              class="mx-auto h-10 w-10 text-violet-300"
+              icon="mdi:creation-outline"
+            />
+            <p class="mt-4 font-medium text-slate-200">
+              No AI analysis generated yet
+            </p>
+            <p class="mx-auto mt-2 max-w-xl text-sm leading-6 text-slate-400">
+              Generate an analysis to identify the likely root cause, relevant
+              log lines, and recommended fixes for this failed deployment.
+            </p>
+          </div>
+
+          <div v-else class="space-y-6 p-6">
+            <div
+              v-if="diagnosis.status === 'FAILED'"
+              class="rounded-xl border border-rose-500/30 bg-rose-500/10 p-4"
+            >
+              <p class="font-semibold text-rose-200">
+                The previous analysis failed
+              </p>
+              <p class="mt-1 text-sm text-rose-300">
+                {{ diagnosis.errorMessage || "Try regenerating the analysis." }}
+              </p>
+            </div>
+
+            <template v-else>
+              <div class="grid gap-4 lg:grid-cols-[1fr_180px]">
+                <article
+                  class="rounded-xl border border-slate-800 bg-slate-950/60 p-5"
+                >
+                  <p
+                    class="text-xs font-semibold uppercase tracking-[0.16em] text-violet-300"
+                  >
+                    Failure summary
+                  </p>
+                  <p class="mt-3 leading-7 text-slate-200">
+                    {{ diagnosis.failureSummary || "No summary was returned." }}
+                  </p>
+                </article>
+
+                <article
+                  class="rounded-xl border border-violet-500/20 bg-violet-500/10 p-5"
+                >
+                  <p
+                    class="text-xs font-semibold uppercase tracking-[0.16em] text-violet-300"
+                  >
+                    Confidence
+                  </p>
+                  <p class="mt-3 text-3xl font-bold text-white">
+                    {{ confidencePercent(diagnosis.confidence) }}
+                  </p>
+                  <div
+                    class="mt-4 h-2 overflow-hidden rounded-full bg-slate-800"
+                  >
+                    <div
+                      :style="{
+                        width: confidencePercent(diagnosis.confidence),
+                      }"
+                      class="h-full rounded-full bg-gradient-to-r from-violet-400 to-cyan-400"
+                    />
+                  </div>
+                </article>
+              </div>
+
+              <article
+                class="rounded-xl border border-slate-800 bg-slate-950/60 p-5"
+              >
+                <p
+                  class="text-xs font-semibold uppercase tracking-[0.16em] text-cyan-300"
+                >
+                  Likely root cause
+                </p>
+                <p class="mt-3 leading-7 text-slate-200">
+                  {{
+                    diagnosis.likelyRootCause || "No root cause was returned."
+                  }}
+                </p>
+              </article>
+
+              <div class="grid gap-6 lg:grid-cols-2">
+                <article
+                  class="rounded-xl border border-slate-800 bg-slate-950/60 p-5"
+                >
+                  <div class="flex items-center gap-2">
+                    <Icon
+                      class="h-5 w-5 text-rose-300"
+                      icon="mdi:console-line"
+                    />
+                    <h3 class="font-semibold text-slate-100">
+                      Relevant log lines
+                    </h3>
+                  </div>
+                  <div
+                    v-if="diagnosis.relevantLogLines.length"
+                    class="mt-4 space-y-2"
+                  >
+                    <pre
+                      v-for="(line, index) in diagnosis.relevantLogLines"
+                      :key="`${index}-${line}`"
+                      class="overflow-x-auto whitespace-pre-wrap break-words rounded-lg border border-rose-500/15 bg-rose-500/5 p-3 font-mono text-xs leading-5 text-rose-200"
+                      >{{ line }}</pre
+                    >
+                  </div>
+                  <p v-else class="mt-4 text-sm text-slate-500">
+                    No specific log lines returned.
+                  </p>
+                </article>
+
+                <article
+                  class="rounded-xl border border-slate-800 bg-slate-950/60 p-5"
+                >
+                  <div class="flex items-center gap-2">
+                    <Icon class="h-5 w-5 text-emerald-300" icon="mdi:tools" />
+                    <h3 class="font-semibold text-slate-100">
+                      Recommended fixes
+                    </h3>
+                  </div>
+                  <ol
+                    v-if="diagnosis.recommendedFixes.length"
+                    class="mt-4 space-y-3"
+                  >
+                    <li
+                      v-for="(fix, index) in diagnosis.recommendedFixes"
+                      :key="`${index}-${fix}`"
+                      class="flex gap-3 text-sm leading-6 text-slate-300"
+                    >
+                      <span
+                        class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-xs font-bold text-emerald-300"
+                      >
+                        {{ index + 1 }}
+                      </span>
+                      <span>{{ fix }}</span>
+                    </li>
+                  </ol>
+                  <p v-else class="mt-4 text-sm text-slate-500">
+                    No fixes were returned.
+                  </p>
+                </article>
+              </div>
+
+              <p class="text-xs text-slate-500">
+                {{ diagnosis.provider }} · {{ diagnosis.model }} ·
+                {{ formatDate(diagnosis.completedAt) }}
+              </p>
+            </template>
           </div>
         </section>
 
