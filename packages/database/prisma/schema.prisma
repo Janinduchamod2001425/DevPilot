@@ -198,3 +198,20 @@ model DeploymentLog {
 
   @@index([deploymentId, createdAt])
 }
+
+model GitHubWebhookDelivery {
+  id           String    @id @default(cuid())
+  deliveryId   String    @unique
+  event        String
+  repositoryId String
+  projectId    String?
+  deploymentId String?
+  errorMessage String?
+  processedAt  DateTime?
+  createdAt    DateTime  @default(now())
+
+  @@index([repositoryId])
+  @@index([projectId])
+  @@index([deploymentId])
+  @@index([createdAt])
+}
