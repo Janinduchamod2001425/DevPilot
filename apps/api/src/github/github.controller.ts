@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Controller,
   Get,
   Query,
@@ -8,7 +9,7 @@ import {
 } from "@nestjs/common";
 import type { Request, Response } from "express";
 import { AuthService } from "../auth/auth.service.js";
-import { GitHubService } from "./github.service.js";
+import { GitHubService, RootDirectoriesResponse } from "./github.service.js";
 
 @Controller("github")
 export class GitHubController {
@@ -75,6 +76,27 @@ export class GitHubController {
     const user = await this.requireUser(request);
 
     return this.githubService.findRepositories(user.id, installationId);
+  }
+
+  @Get("repositories/root-directories")
+  async repositoryRootDirectories(
+    @Query("installationId") installationId: string | undefined,
+    @Query("repositoryId") repositoryId: string | undefined,
+    @Req() request: Request,
+  ): Promise<RootDirectoriesResponse> {
+    const user = await this.requireUser(request);
+
+    if (!installationId || !repositoryId) {
+      throw new BadRequestException(
+        "installationId and repositoryId are required",
+      );
+    }
+
+    return this.githubService.detectRootDirectories(
+      user.id,
+      installationId,
+      repositoryId,
+    );
   }
 
   private async requireUser(request: Request) {

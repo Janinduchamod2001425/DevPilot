@@ -2,9 +2,14 @@ import type {
   AuthResponse,
   Deployment,
   DeploymentLog,
+  GitHubInstallation,
+  GitHubRepositoriesResponse,
   HealthResponse,
+  ImportProjectPayload,
+  ImportProjectResponse,
   LogoutResponse,
   Project,
+  RootDirectoriesResponse,
 } from "~/types/api";
 
 export function useDevPilotApi() {
@@ -145,11 +150,83 @@ export function useDevPilotApi() {
     window.location.assign(getGitHubLoginUrl(returnTo));
   }
 
+  function getGitHubInstallUrl(): string {
+    return `${config.public.apiBaseUrl}/github/install`;
+  }
+
+  function installGitHubApp(): void {
+    if (!import.meta.client) {
+      return;
+    }
+
+    window.location.assign(getGitHubInstallUrl());
+  }
+
+  function getGitHubInstallations(): Promise<GitHubInstallation[]> {
+    return api<GitHubInstallation[]>("/github/installations");
+  }
+
+  function getGitHubRepositories(
+    installationId: string,
+  ): Promise<GitHubRepositoriesResponse> {
+    return api<GitHubRepositoriesResponse>("/github/repositories", {
+      query: {
+        installationId,
+      },
+    });
+  }
+
+  function getRepositoryRootDirectories(
+    installationId: string,
+    repositoryId: string,
+  ): Promise<RootDirectoriesResponse> {
+    return api<RootDirectoriesResponse>(
+      "/github/repositories/root-directories",
+      {
+        query: {
+          installationId,
+          repositoryId,
+        },
+      },
+    );
+  }
+
+  function importProject(
+    payload: ImportProjectPayload,
+  ): Promise<ImportProjectResponse> {
+    return api<ImportProjectResponse>("/projects/import", {
+      method: "POST",
+      body: payload,
+    });
+  }
+
+  function getProjectRootDirectories(
+    projectId: string,
+  ): Promise<RootDirectoriesResponse> {
+    return api<RootDirectoriesResponse>(
+      `/projects/${projectId}/root-directories`,
+    );
+  }
+
+  function updateProjectRootDirectory(
+    projectId: string,
+    rootDirectory: string,
+  ): Promise<Project> {
+    return api<Project>(`/projects/${projectId}/root-directory`, {
+      method: "PATCH",
+      body: {
+        rootDirectory,
+      },
+    });
+  }
+
   return {
     getHealth,
     getProjects,
     getProject,
     getProjectDeployments,
+    getProjectRootDirectories,
+    updateProjectRootDirectory,
     getDeployment,
     getDeploymentLogs,
     createDeployment,
@@ -159,5 +236,11 @@ export function useDevPilotApi() {
     logout,
     getGitHubLoginUrl,
     loginWithGitHub,
+    getGitHubInstallUrl,
+    installGitHubApp,
+    getGitHubInstallations,
+    getGitHubRepositories,
+    getRepositoryRootDirectories,
+    importProject,
   };
 }

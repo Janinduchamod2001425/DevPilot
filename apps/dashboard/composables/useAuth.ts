@@ -45,15 +45,30 @@ export function useAuth() {
 
   async function logout(): Promise<void> {
     const { logout: requestLogout } = useDevPilotApi();
+    const toast = useAppToast();
 
     try {
       await requestLogout();
-    } finally {
+
       user.value = null;
       initialized.value = true;
-    }
 
-    await navigateTo("/login");
+      await navigateTo("/login");
+
+      toast.success(
+        "Logged out successfully",
+        "Your DevPilot session has ended.",
+      );
+    } catch (error) {
+      console.error("Logout failed:", error);
+
+      toast.error(
+        "Logout failed",
+        "Your session could not be ended. Please try again.",
+      );
+
+      throw error;
+    }
   }
 
   function clearAuth(): void {

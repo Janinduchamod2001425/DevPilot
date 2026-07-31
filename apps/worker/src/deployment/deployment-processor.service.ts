@@ -220,11 +220,7 @@ export class DeploymentProcessorService
         rootDirectory,
       );
 
-      await this.appendDeploymentLog(
-        deploymentId,
-        "ANALYZING",
-        `Detected ${analysis.framework} project using ${analysis.packageManager}`,
-      );
+      const applicationPort = this.resolveApplicationPort(analysis);
 
       const discoveredApplications =
         await this.monorepoDiscoveryService.discover(cloneResult.workspacePath);
@@ -232,9 +228,13 @@ export class DeploymentProcessorService
       await this.appendDeploymentLog(
         deploymentId,
         "ANALYZING",
-        `Discovered ${discoveredApplications.length} deployable application${
-          discoveredApplications.length === 1 ? "" : "s"
-        }`,
+        `Detected ${analysis.framework} project using ${analysis.packageManager}`,
+      );
+
+      await this.appendDeploymentLog(
+        deploymentId,
+        "ANALYZING",
+        `Application will run on internal port ${applicationPort}`,
       );
 
       await this.prismaService.client.deploymentAnalysis.upsert({
@@ -249,7 +249,7 @@ export class DeploymentProcessorService
           installCommand: analysis.installCommand,
           buildCommand: analysis.buildCommand,
           startCommand: analysis.startCommand,
-          applicationPort: analysis.applicationPort,
+          applicationPort,
           hasDockerfile: analysis.hasDockerfile,
           rootDirectory: analysis.rootDirectory,
           warnings: analysis.warnings,
@@ -262,7 +262,7 @@ export class DeploymentProcessorService
           installCommand: analysis.installCommand,
           buildCommand: analysis.buildCommand,
           startCommand: analysis.startCommand,
-          applicationPort: analysis.applicationPort,
+          applicationPort,
           hasDockerfile: analysis.hasDockerfile,
           rootDirectory: analysis.rootDirectory,
           warnings: analysis.warnings,
@@ -336,8 +336,6 @@ export class DeploymentProcessorService
 
       this.logger.log(`Deployment image ready: ${dockerBuildResult.imageTag}`);
 
-      const applicationPort = analysis.applicationPort ?? 3000;
-
       await this.appendDeploymentLog(
         deploymentId,
         "STARTING",
@@ -392,6 +390,36 @@ export class DeploymentProcessorService
 
       throw error;
     }
+  }
+
+  private resolveApplicationPort(analysis: {
+    framework: string;
+    applicationPort: number | null;
+  }): number {
+    /*
+     * Generated React + Vite deployments are served by Nginx, which
+     * listens on port 80. This overrides Vite's development port and
+     * the worker's previous fallback of 3000.
+     */
+    if (analysis.framework === "React with Vite") {
+      return 80;
+    }
+
+    const detectedPort = Number(analysis.applicationPort);
+
+    if (
+      Number.isInteger(detectedPort) &&
+      detectedPort >= 1 &&
+      detectedPort <= 65_535
+    ) {
+      return detectedPort;
+    }
+
+    /*
+     * Nuxt's generated Node server and the current generic fallback
+     * both listen on port 3000.
+     */
+    return 3000;
   }
 
   private async processStopDeployment(

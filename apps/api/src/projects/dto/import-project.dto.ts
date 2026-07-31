@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsString } from "class-validator";
+import { IsNotEmpty, IsString, MaxLength } from "class-validator";
 
 export class ImportProjectDto {
   @IsString()
@@ -8,4 +8,9 @@ export class ImportProjectDto {
   @IsString()
   @IsNotEmpty()
   repositoryId!: string;
+
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(500)
+  rootDirectory!: string;
 }

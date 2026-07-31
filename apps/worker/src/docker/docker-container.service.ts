@@ -1,10 +1,19 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { Injectable, Logger } from "@nestjs/common";
-import { DeploymentStatus } from "@devpilot/database";
+import { DeploymentLogLevel, DeploymentStatus } from "@devpilot/database";
 import { PrismaService } from "../database/prisma.service.js";
 
 const execFileAsync = promisify(execFile);
+
+const MAX_LOG_MESSAGE_LENGTH = 10_000;
+
+const ANSI_ESCAPE_CHARACTER = String.fromCharCode(27);
+
+const ANSI_ESCAPE_SEQUENCE_PATTERN = new RegExp(
+  `${ANSI_ESCAPE_CHARACTER}\\[[0-?]*[ -/]*[@-~]`,
+  "g",
+);
 
 export type DockerContainerResult = {
   containerId: string;
@@ -51,6 +60,11 @@ export class DockerContainerService {
 
     this.logger.log(`Deployment ${deploymentId} changed to STARTING`);
 
+    await this.appendContainerLog(
+      deploymentId,
+      `Starting Docker container from image ${imageTag}`,
+    );
+
     let createdContainerId: string | null = null;
 
     try {
@@ -71,7 +85,12 @@ export class DockerContainerService {
         applicationPort,
       );
 
-      const liveUrl = `http://localhost:${assignedPort}`;
+      const liveUrl = `http://127.0.0.1:${assignedPort}`;
+
+      await this.appendContainerLog(
+        deploymentId,
+        `Container started and assigned to ${liveUrl}`,
+      );
 
       await this.prismaService.client.deployment.update({
         where: {
@@ -89,7 +108,12 @@ export class DockerContainerService {
       this.logger.log(`Deployment available at ${liveUrl}`);
       this.logger.log(`Deployment ${deploymentId} changed to HEALTH_CHECKING`);
 
-      await this.waitUntilHealthy(createdContainerId, liveUrl);
+      await this.waitUntilHealthy(
+        deploymentId,
+        createdContainerId,
+        applicationPort,
+        liveUrl,
+      );
 
       await this.prismaService.client.deployment.update({
         where: {
@@ -113,6 +137,28 @@ export class DockerContainerService {
         error instanceof Error
           ? error.message
           : "Unknown Docker container error";
+
+      /*
+       * Capture the application output before removing the failed container.
+       * Once the container is removed, Docker can no longer return its logs.
+       */
+      const containerLogs = createdContainerId
+        ? await this.getContainerLogs(createdContainerId)
+        : "";
+
+      if (containerLogs) {
+        await this.appendContainerLog(
+          deploymentId,
+          `Container output:\n${containerLogs}`,
+          DeploymentLogLevel.ERROR,
+        );
+      }
+
+      await this.appendContainerLog(
+        deploymentId,
+        `Docker container startup failed: ${message}`,
+        DeploymentLogLevel.ERROR,
+      );
 
       /*
        * Remove only the container created by this start attempt. Never
@@ -282,7 +328,9 @@ export class DockerContainerService {
   }
 
   private async waitUntilHealthy(
+    deploymentId: string,
     containerId: string,
+    applicationPort: number,
     liveUrl: string,
   ): Promise<void> {
     const maximumAttempts = 30;
@@ -301,34 +349,118 @@ export class DockerContainerService {
         );
       }
 
-      try {
-        const response = await fetch(liveUrl, {
-          signal: AbortSignal.timeout(3_000),
-        });
+      /*
+       * Check the application from inside the container.
+       * This avoids Docker Desktop host-port forwarding delays.
+       *
+       * Alpine-based Node and Nginx images provide BusyBox wget.
+       */
+      const internallyHealthy = await this.checkContainerHealth(
+        containerId,
+        applicationPort,
+      );
 
-        if (response.ok) {
-          this.logger.log(`Health check succeeded on attempt ${attempt}`);
+      if (internallyHealthy) {
+        this.logger.log(
+          `Internal container health check succeeded on attempt ${attempt}`,
+        );
 
-          return;
+        /*
+         * The application is running. Test the published address as an
+         * additional check, but do not incorrectly fail the deployment
+         * because of a temporary Docker Desktop forwarding delay.
+         */
+        const hostReachable = await this.checkPublishedHealth(liveUrl);
+
+        if (hostReachable) {
+          this.logger.log(`Published health check succeeded at ${liveUrl}`);
+        } else {
+          this.logger.warn(
+            `Application is healthy inside the container, but ${liveUrl} is not reachable yet`,
+          );
         }
 
-        this.logger.warn(
-          `Health check attempt ${attempt} returned HTTP ${response.status}`,
+        await this.appendContainerLog(
+          deploymentId,
+          `Application health check succeeded on attempt ${attempt}`,
         );
-      } catch {
-        this.logger.warn(
-          `Health check attempt ${attempt}/${maximumAttempts} failed`,
-        );
+
+        return;
       }
 
-      await this.delay(delayMilliseconds);
+      const logs = await this.getContainerLogs(containerId);
+
+      this.logger.warn(
+        `Health check attempt ${attempt}/${maximumAttempts} failed${
+          logs ? `. Recent container logs: ${logs}` : ""
+        }`,
+      );
+
+      if (attempt < maximumAttempts) {
+        await this.delay(delayMilliseconds);
+      }
     }
 
+    const finalLogs = await this.getContainerLogs(containerId);
+
     throw new Error(
-      `Application did not become healthy within ${
-        (maximumAttempts * delayMilliseconds) / 1_000
-      } seconds`,
+      `Application did not become healthy within 60 seconds${
+        finalLogs ? `. Container logs: ${finalLogs}` : ""
+      }`,
     );
+  }
+
+  private async checkContainerHealth(
+    containerId: string,
+    applicationPort: number,
+  ): Promise<boolean> {
+    try {
+      await this.runDocker([
+        "exec",
+        containerId,
+        "wget",
+        "--quiet",
+        "--spider",
+        "--timeout=3",
+        `http://127.0.0.1:${applicationPort}/`,
+      ]);
+
+      return true;
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Unknown internal health-check error";
+
+      this.logger.debug(
+        `Internal health check failed for container ${containerId}: ${message}`,
+      );
+
+      return false;
+    }
+  }
+
+  private async checkPublishedHealth(liveUrl: string): Promise<boolean> {
+    try {
+      const response = await fetch(liveUrl, {
+        method: "GET",
+        redirect: "manual",
+        signal: AbortSignal.timeout(3_000),
+      });
+
+      return response.status >= 200 && response.status < 400;
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Unknown published health-check error";
+
+      this.logger.debug(
+        `Published health check failed for ${liveUrl}: ${message}`,
+      );
+
+      return false;
+    }
   }
 
   private async isContainerRunning(containerId: string): Promise<boolean> {
@@ -359,6 +491,41 @@ export class DockerContainerService {
       await this.runDocker(["rm", "--force", containerName]);
     } catch {
       // The container may not have been created.
+    }
+  }
+
+  private async appendContainerLog(
+    deploymentId: string,
+    message: string,
+    level: DeploymentLogLevel = DeploymentLogLevel.INFO,
+  ): Promise<void> {
+    const normalizedMessage = message
+      .replace(ANSI_ESCAPE_SEQUENCE_PATTERN, "")
+      .trim()
+      .slice(0, MAX_LOG_MESSAGE_LENGTH);
+
+    if (!normalizedMessage) {
+      return;
+    }
+
+    try {
+      await this.prismaService.client.deploymentLog.create({
+        data: {
+          deploymentId,
+          level,
+          stage: "STARTING",
+          message: normalizedMessage,
+        },
+      });
+    } catch (error: unknown) {
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : "Unknown deployment-log persistence error";
+
+      this.logger.error(
+        `Could not persist container output for deployment ${deploymentId}: ${errorMessage}`,
+      );
     }
   }
 

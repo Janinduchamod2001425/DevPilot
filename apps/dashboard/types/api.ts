@@ -81,3 +81,78 @@ export type AuthResponse = {
 export type LogoutResponse = {
   success: true;
 };
+
+export type GitHubAccountType = "USER" | "ORGANIZATION";
+
+export interface GitHubInstallation {
+  id: string;
+  installationId: string;
+  accountId: string;
+  accountLogin: string;
+  accountType: GitHubAccountType;
+  avatarUrl: string | null;
+  repositorySelection: string;
+  suspendedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface GitHubRepositoryOwner {
+  id: string;
+  login: string;
+  avatarUrl: string | null;
+}
+
+export interface GitHubRepository {
+  id: string;
+  name: string;
+  fullName: string;
+  private: boolean;
+  htmlUrl: string;
+  cloneUrl: string;
+  defaultBranch: string;
+  owner: GitHubRepositoryOwner;
+}
+
+export interface GitHubRepositoriesResponse {
+  installation: {
+    id: string;
+    installationId: string;
+    accountLogin: string;
+    accountType: GitHubAccountType;
+    avatarUrl: string | null;
+  };
+  repositories: GitHubRepository[];
+}
+
+export interface RootDirectoryCandidate {
+  rootDirectory: string;
+  deployable: boolean;
+  framework: string | null;
+  packageManager: string | null;
+  markers: string[];
+}
+
+export interface RootDirectoriesResponse {
+  repository: {
+    id: string;
+    name: string;
+    fullName: string;
+    defaultBranch: string;
+  };
+  recommendedRootDirectory: string;
+  candidates: RootDirectoryCandidate[];
+  treeTruncated: boolean;
+}
+
+export interface ImportProjectPayload {
+  installationId: string;
+  repositoryId: string;
+  rootDirectory: string;
+}
+
+export interface ImportProjectResponse {
+  project: Project;
+  deployment: Deployment | null;
+  deploymentWarning?: string;
+}

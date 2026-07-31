@@ -32,6 +32,12 @@ enum GitHubAccountType {
   ORGANIZATION
 }
 
+enum AiDiagnosisStatus {
+  PENDING
+  COMPLETED
+  FAILED
+}
+
 model User {
   id          String  @id @default(cuid())
   githubId    String  @unique
@@ -153,8 +159,9 @@ model Deployment {
   startedAt  DateTime?
   finishedAt DateTime?
 
-  analysis DeploymentAnalysis?
-  logs     DeploymentLog[]
+  analysis  DeploymentAnalysis?
+  logs      DeploymentLog[]
+  diagnosis AiDiagnosis?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -197,4 +204,46 @@ model DeploymentLog {
   createdAt DateTime @default(now())
 
   @@index([deploymentId, createdAt])
+}
+
+model GitHubWebhookDelivery {
+  id           String    @id @default(cuid())
+  deliveryId   String    @unique
+  event        String
+  repositoryId String
+  projectId    String?
+  deploymentId String?
+  errorMessage String?
+  processedAt  DateTime?
+  createdAt    DateTime  @default(now())
+
+  @@index([repositoryId])
+  @@index([projectId])
+  @@index([deploymentId])
+  @@index([createdAt])
+}
+
+model AiDiagnosis {
+  id           String            @id @default(cuid())
+  deploymentId String            @unique
+  status       AiDiagnosisStatus @default(PENDING)
+
+  failureSummary   String?
+  likelyRootCause  String?
+  relevantLogLines String[] @default([])
+  recommendedFixes String[] @default([])
+  confidence       Float?
+
+  provider     String?
+  model        String?
+  errorMessage String?
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  completedAt DateTime?
+
+  deployment Deployment @relation(fields: [deploymentId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+  @@index([createdAt])
 }

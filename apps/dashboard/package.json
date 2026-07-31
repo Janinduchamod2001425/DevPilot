@@ -10,10 +10,13 @@
     "lint": "eslint ."
   },
   "dependencies": {
+    "@iconify/vue": "^5.0.1",
     "@nuxtjs/tailwindcss": "latest",
+    "@vueuse/motion": "^3.0.3",
     "nuxt": "latest",
     "vue": "latest",
-    "vue-router": "latest"
+    "vue-router": "latest",
+    "vue-sonner": "^2.0.9"
   },
   "devDependencies": {
     "@nuxt/eslint": "latest",

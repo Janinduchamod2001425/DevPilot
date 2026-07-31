@@ -39,6 +39,14 @@ export class ProjectsController {
     return this.projectsService.findDeployments(request.user.id, projectId);
   }
 
+  @Get(":projectId/root-directories")
+  findRootDirectories(
+    @Param("projectId") projectId: string,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.projectsService.findRootDirectories(request.user.id, projectId);
+  }
+
   @Get(":projectId")
   findOne(
     @Param("projectId") projectId: string,

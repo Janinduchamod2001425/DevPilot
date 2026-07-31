@@ -15,6 +15,36 @@ import type {
   GitHubRepositoriesResponse,
 } from "./github.types.js";
 
+interface GitHubTreeItem {
+  path: string;
+  type: "blob" | "tree";
+}
+
+interface GitHubTreeResponse {
+  tree: GitHubTreeItem[];
+  truncated: boolean;
+}
+
+export interface RootDirectoryCandidate {
+  rootDirectory: string;
+  deployable: boolean;
+  framework: string | null;
+  packageManager: string | null;
+  markers: string[];
+}
+
+export interface RootDirectoriesResponse {
+  repository: {
+    id: string;
+    name: string;
+    fullName: string;
+    defaultBranch: string;
+  };
+  recommendedRootDirectory: string;
+  candidates: RootDirectoryCandidate[];
+  treeTruncated: boolean;
+}
+
 @Injectable()
 export class GitHubService {
   constructor(
@@ -198,10 +228,164 @@ export class GitHubService {
     };
   }
 
+  async detectRootDirectories(
+    userId: string,
+    databaseInstallationId: string,
+    repositoryId: string,
+  ): Promise<RootDirectoriesResponse> {
+    const { installation, repository } = await this.findAuthorizedRepository(
+      userId,
+      databaseInstallationId,
+      repositoryId,
+    );
+
+    const installationToken = await this.createInstallationToken(
+      installation.installationId,
+    );
+
+    const owner = encodeURIComponent(repository.owner.login);
+    const repositoryName = encodeURIComponent(repository.name);
+    const branch = encodeURIComponent(repository.defaultBranch);
+
+    const response = await fetch(
+      `https://api.github.com/repos/${owner}/${repositoryName}/git/trees/${branch}?recursive=1`,
+      {
+        headers: this.createGitHubHeaders(installationToken),
+        signal: AbortSignal.timeout(20_000),
+      },
+    );
+
+    if (response.status === 404) {
+      throw new NotFoundException(
+        "The repository tree or default branch could not be found",
+      );
+    }
+
+    if (!response.ok) {
+      throw new BadGatewayException(
+        `GitHub repository-tree request returned HTTP ${response.status}`,
+      );
+    }
+
+    const result = (await response.json()) as GitHubTreeResponse;
+
+    const ignoredDirectories = new Set([
+      "node_modules",
+      ".git",
+      ".next",
+      ".nuxt",
+      ".output",
+      "dist",
+      "build",
+      "coverage",
+      "vendor",
+    ]);
+
+    const deployableMarkers = new Set([
+      "package.json",
+      "Dockerfile",
+      "pyproject.toml",
+      "requirements.txt",
+      "pom.xml",
+      "build.gradle",
+      "go.mod",
+      "Cargo.toml",
+    ]);
+
+    const directoryFiles = new Map<string, Set<string>>();
+
+    // Root must always be available as a choice.
+    directoryFiles.set(".", new Set());
+
+    for (const item of result.tree) {
+      if (item.type !== "blob") {
+        continue;
+      }
+
+      const pathParts = item.path.split("/");
+
+      if (pathParts.some((part) => ignoredDirectories.has(part))) {
+        continue;
+      }
+
+      const fileName = pathParts.pop();
+
+      if (!fileName) {
+        continue;
+      }
+
+      const directory = pathParts.length === 0 ? "." : pathParts.join("/");
+
+      const existingFiles = directoryFiles.get(directory) ?? new Set<string>();
+
+      existingFiles.add(fileName);
+      directoryFiles.set(directory, existingFiles);
+    }
+
+    const candidates: RootDirectoryCandidate[] = [];
+
+    for (const [rootDirectory, files] of directoryFiles.entries()) {
+      const markers = [...files].filter((file) => deployableMarkers.has(file));
+
+      const deployable = markers.length > 0;
+
+      // Keep root available even when it is not deployable.
+      if (rootDirectory !== "." && !deployable) {
+        continue;
+      }
+
+      candidates.push({
+        rootDirectory,
+        deployable,
+        framework: this.detectFramework(files),
+        packageManager: this.detectPackageManager(files),
+        markers,
+      });
+    }
+
+    candidates.sort((first, second) => {
+      if (first.rootDirectory === ".") return -1;
+      if (second.rootDirectory === ".") return 1;
+
+      if (first.deployable !== second.deployable) {
+        return first.deployable ? -1 : 1;
+      }
+
+      const firstDepth = first.rootDirectory.split("/").length;
+      const secondDepth = second.rootDirectory.split("/").length;
+
+      if (firstDepth !== secondDepth) {
+        return firstDepth - secondDepth;
+      }
+
+      return first.rootDirectory.localeCompare(second.rootDirectory);
+    });
+
+    const rootCandidate = candidates.find(
+      (candidate) => candidate.rootDirectory === ".",
+    );
+
+    const recommendedCandidate = rootCandidate?.deployable
+      ? rootCandidate
+      : candidates.find((candidate) => candidate.deployable);
+
+    return {
+      repository: {
+        id: repository.id,
+        name: repository.name,
+        fullName: repository.fullName,
+        defaultBranch: repository.defaultBranch,
+      },
+      recommendedRootDirectory: recommendedCandidate?.rootDirectory ?? ".",
+      candidates,
+      treeTruncated: result.truncated,
+    };
+  }
+
   getDashboardRedirectUrl(parameters: Record<string, string>): string {
     const dashboardUrl = this.configService.getOrThrow<string>("DASHBOARD_URL");
 
-    const redirectUrl = new URL("/", dashboardUrl);
+    const redirectUrl = new URL("/new", dashboardUrl);
 
     for (const [key, value] of Object.entries(parameters)) {
       redirectUrl.searchParams.set(key, value);
@@ -355,6 +539,98 @@ export class GitHubService {
 
   private base64UrlEncode(value: object): string {
     return Buffer.from(JSON.stringify(value)).toString("base64url");
+  }
+
+  private detectFramework(files: Set<string>): string | null {
+    const fileNames = [...files];
+
+    if (
+      fileNames.some(
+        (file) =>
+          file === "next.config.js" ||
+          file === "next.config.mjs" ||
+          file === "next.config.ts",
+      )
+    ) {
+      return "Next.js";
+    }
+
+    if (
+      fileNames.some(
+        (file) => file === "nuxt.config.js" || file === "nuxt.config.ts",
+      )
+    ) {
+      return "Nuxt";
+    }
+
+    if (
+      fileNames.some(
+        (file) =>
+          file === "vite.config.js" ||
+          file === "vite.config.ts" ||
+          file === "vite.config.mjs",
+      )
+    ) {
+      return "Vite";
+    }
+
+    if (files.has("angular.json")) {
+      return "Angular";
+    }
+
+    if (files.has("pom.xml")) {
+      return "Maven";
+    }
+
+    if (files.has("build.gradle")) {
+      return "Gradle";
+    }
+
+    if (files.has("pyproject.toml") || files.has("requirements.txt")) {
+      return "Python";
+    }
+
+    if (files.has("go.mod")) {
+      return "Go";
+    }
+
+    if (files.has("Cargo.toml")) {
+      return "Rust";
+    }
+
+    if (files.has("package.json")) {
+      return "Node.js";
+    }
+
+    if (files.has("Dockerfile")) {
+      return "Docker";
+    }
+
+    return null;
+  }
+
+  private detectPackageManager(files: Set<string>): string | null {
+    if (files.has("pnpm-lock.yaml")) {
+      return "pnpm";
+    }
+
+    if (files.has("yarn.lock")) {
+      return "yarn";
+    }
+
+    if (files.has("bun.lock") || files.has("bun.lockb")) {
+      return "bun";
+    }
+
+    if (files.has("package-lock.json")) {
+      return "npm";
+    }
+
+    if (files.has("package.json")) {
+      return "npm";
+    }
+
+    return null;
   }
 
   private createGitHubHeaders(token: string): Record<string, string> {
