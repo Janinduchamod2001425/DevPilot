@@ -107,6 +107,12 @@ const activeStatuses: DeploymentStatus[] = [
   "HEALTH_CHECKING",
 ];
 
+let diagnosisPollTimer: ReturnType<typeof setTimeout> | null = null;
+let diagnosisPollAttempts = 0;
+
+const MAX_DIAGNOSIS_POLL_ATTEMPTS = 20;
+const DIAGNOSIS_POLL_INTERVAL = 3000;
+
 const latestDeployment = computed(() => deployments.value[0] ?? null);
 const selectedDeployment = computed(() => {
   if (!selectedDeploymentId.value) return null;
@@ -595,12 +601,49 @@ async function selectDeployment(deploymentId: string) {
 }
 
 function resetDiagnosis(): void {
+  stopDiagnosisPolling();
   diagnosis.value = null;
+  diagnosisLoading.value = false;
   diagnosisErrorMessage.value = "";
   diagnosisCheckedDeploymentId.value = null;
 }
 
-async function loadDiagnosis(deploymentId: string): Promise<void> {
+function stopDiagnosisPolling(resetAttempts = true): void {
+  if (diagnosisPollTimer) {
+    clearTimeout(diagnosisPollTimer);
+    diagnosisPollTimer = null;
+  }
+
+  if (resetAttempts) {
+    diagnosisPollAttempts = 0;
+  }
+}
+
+function scheduleDiagnosisPoll(deploymentId: string): void {
+  if (
+    diagnosisPollTimer ||
+    diagnosisPollAttempts >= MAX_DIAGNOSIS_POLL_ATTEMPTS
+  ) {
+    return;
+  }
+
+  diagnosisPollTimer = setTimeout(() => {
+    diagnosisPollTimer = null;
+    diagnosisPollAttempts += 1;
+
+    if (selectedDeploymentId.value !== deploymentId) {
+      stopDiagnosisPolling();
+      return;
+    }
+
+    void loadDiagnosis(deploymentId, true);
+  }, DIAGNOSIS_POLL_INTERVAL);
+}
+
+async function loadDiagnosis(
+  deploymentId: string,
+  isPolling = false,
+): Promise<void> {
   const deployment = deployments.value.find((item) => item.id === deploymentId);
 
   if (!deployment || deployment.status !== "FAILED") {
@@ -608,27 +651,48 @@ async function loadDiagnosis(deploymentId: string): Promise<void> {
     return;
   }
 
-  diagnosisLoading.value = true;
+  if (!isPolling) {
+    stopDiagnosisPolling();
+    diagnosisLoading.value = true;
+  }
+
   diagnosisErrorMessage.value = "";
   diagnosisCheckedDeploymentId.value = deploymentId;
 
   try {
     const result = await diagnosisRequest(deploymentId, "GET");
-    if (selectedDeploymentId.value === deploymentId) diagnosis.value = result;
+
+    if (selectedDeploymentId.value !== deploymentId) return;
+
+    diagnosis.value = result;
+
+    if (result.status === "PENDING") {
+      scheduleDiagnosisPoll(deploymentId);
+      return;
+    }
+
+    stopDiagnosisPolling();
+
+    if (result.status === "FAILED") {
+      diagnosisErrorMessage.value =
+        result.errorMessage ?? "Automatic AI analysis failed.";
+    }
   } catch (error) {
     if (selectedDeploymentId.value !== deploymentId) return;
 
     if (getRequestStatus(error) === 404) {
       diagnosis.value = null;
+      scheduleDiagnosisPoll(deploymentId);
       return;
     }
 
+    stopDiagnosisPolling();
     diagnosisErrorMessage.value = getRequestError(
       error,
       "The saved AI diagnosis could not be loaded.",
     );
   } finally {
-    if (selectedDeploymentId.value === deploymentId) {
+    if (!isPolling && selectedDeploymentId.value === deploymentId) {
       diagnosisLoading.value = false;
     }
   }
@@ -644,6 +708,7 @@ async function generateDiagnosis(): Promise<void> {
     return;
 
   diagnosisGenerating.value = true;
+  stopDiagnosisPolling();
   diagnosisErrorMessage.value = "";
   const toastId = toast.loading(
     diagnosis.value
@@ -741,6 +806,7 @@ onBeforeUnmount(() => {
   stopPolling();
   stopLogPolling();
   stopDiscoveryPolling();
+  stopDiagnosisPolling();
 
   document.removeEventListener("visibilitychange", handleVisibilityChange);
 });
@@ -1105,7 +1171,11 @@ onBeforeUnmount(() => {
             </div>
 
             <button
-              :disabled="diagnosisGenerating || diagnosisLoading"
+              :disabled="
+                diagnosisGenerating ||
+                diagnosisLoading ||
+                diagnosis?.status === 'PENDING'
+              "
               class="inline-flex items-center justify-center gap-2 rounded-xl bg-violet-400 px-4 py-2.5 text-sm font-bold text-slate-950 transition hover:bg-violet-300 disabled:cursor-not-allowed disabled:opacity-50"
               type="button"
               @click="generateDiagnosis"
@@ -1122,9 +1192,11 @@ onBeforeUnmount(() => {
               {{
                 diagnosisGenerating
                   ? "Analyzing failure…"
-                  : diagnosis
-                    ? "Regenerate analysis"
-                    : "Generate AI analysis"
+                  : diagnosis?.status === "PENDING"
+                    ? "Analyzing automatically…"
+                    : diagnosis
+                      ? "Regenerate analysis"
+                      : "Generate AI analysis"
               }}
             </button>
           </div>
@@ -1151,17 +1223,29 @@ onBeforeUnmount(() => {
               icon="mdi:creation-outline"
             />
             <p class="mt-4 font-medium text-slate-200">
-              No AI analysis generated yet
+              Waiting for automatic AI analysis…
             </p>
             <p class="mx-auto mt-2 max-w-xl text-sm leading-6 text-slate-400">
-              Generate an analysis to identify the likely root cause, relevant
-              log lines, and recommended fixes for this failed deployment.
+              DevPilot is checking for the diagnosis in the background. You can
+              still generate it manually if automatic analysis does not start.
             </p>
           </div>
 
           <div v-else class="space-y-6 p-6">
+            <div v-if="diagnosis.status === 'PENDING'" class="py-8 text-center">
+              <span
+                class="mx-auto block h-8 w-8 animate-spin rounded-full border-2 border-violet-500/30 border-t-violet-300"
+              />
+              <p class="mt-4 font-medium text-violet-200">
+                Generating AI failure analysis…
+              </p>
+              <p class="mt-2 text-sm text-slate-400">
+                Gemini is analyzing the deployment logs automatically.
+              </p>
+            </div>
+
             <div
-              v-if="diagnosis.status === 'FAILED'"
+              v-else-if="diagnosis.status === 'FAILED'"
               class="rounded-xl border border-rose-500/30 bg-rose-500/10 p-4"
             >
               <p class="font-semibold text-rose-200">
