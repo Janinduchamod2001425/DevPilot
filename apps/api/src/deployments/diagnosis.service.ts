@@ -66,10 +66,46 @@ export class DiagnosisService {
   }
 
   async generate(userId: string, deploymentId: string): Promise<AiDiagnosis> {
-    const deployment = await this.verifyDeploymentOwnership(
-      userId,
-      deploymentId,
-    );
+    await this.verifyDeploymentOwnership(userId, deploymentId);
+
+    return this.generateForDeployment(deploymentId);
+  }
+
+  async generateAutomatic(deploymentId: string): Promise<AiDiagnosis> {
+    const deployment = await this.prismaService.client.deployment.findUnique({
+      where: {
+        id: deploymentId,
+      },
+      select: {
+        id: true,
+        status: true,
+      },
+    });
+
+    if (!deployment) {
+      throw new NotFoundException("Deployment not found.");
+    }
+
+    return this.generateForDeployment(deploymentId);
+  }
+
+  private async generateForDeployment(
+    deploymentId: string,
+  ): Promise<AiDiagnosis> {
+    const deployment = await this.prismaService.client.deployment.findUnique({
+      where: {
+        id: deploymentId,
+      },
+      select: {
+        id: true,
+        status: true,
+        errorMessage: true,
+      },
+    });
+
+    if (!deployment) {
+      throw new NotFoundException("Deployment not found.");
+    }
 
     if (deployment.status !== DeploymentStatus.FAILED) {
       throw new BadRequestException(
