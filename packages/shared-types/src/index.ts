@@ -12,6 +12,8 @@ export const deploymentStatuses = [
   "ROLLED_BACK",
 ] as const;
 
+export * from "./diagnosis-queue.js";
+
 export type DeploymentStatus = (typeof deploymentStatuses)[number];
 
 export const DEPLOYMENT_QUEUE_NAME = "deployments";
