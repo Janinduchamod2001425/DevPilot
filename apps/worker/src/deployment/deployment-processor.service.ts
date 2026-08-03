@@ -7,6 +7,9 @@ import {
 import { ConfigService } from "@nestjs/config";
 import { DeploymentLogLevel, DeploymentStatus } from "@devpilot/database";
 import {
+  AUTOMATIC_DIAGNOSIS_JOB_NAME,
+  DIAGNOSIS_QUEUE_NAME,
+  type AutomaticDiagnosisJobData,
   DEPLOYMENT_JOB_NAME,
   DEPLOYMENT_QUEUE_NAME,
   RESTART_DEPLOYMENT_JOB_NAME,
@@ -18,7 +21,7 @@ import {
   type RestartDeploymentJobData,
   type StopDeploymentJobData,
 } from "@devpilot/shared-types";
-import { Job, Worker } from "bullmq";
+import { Job, Queue, Worker } from "bullmq";
 import { RepositoryAnalyzerService } from "../analyzer/repository-analyzer.service.js";
 import { MonorepoDiscoveryService } from "../analyzer/monorepo-discovery.service.js";
 import { PrismaService } from "../database/prisma.service.js";
@@ -39,6 +42,8 @@ export class DeploymentProcessorService
     DeploymentJobName
   >;
 
+  private diagnosisQueue?: Queue<AutomaticDiagnosisJobData>;
+
   constructor(
     private readonly configService: ConfigService,
     private readonly prismaService: PrismaService,
@@ -55,6 +60,18 @@ export class DeploymentProcessorService
 
     const port = Number(this.configService.get<string>("REDIS_PORT") ?? 6380);
 
+    const connection = {
+      host,
+      port,
+    };
+
+    this.diagnosisQueue = new Queue<AutomaticDiagnosisJobData>(
+      DIAGNOSIS_QUEUE_NAME,
+      {
+        connection,
+      },
+    );
+
     this.worker = new Worker<
       DeploymentJobData,
       DeploymentJobResult,
@@ -67,10 +84,7 @@ export class DeploymentProcessorService
         return this.processJob(job);
       },
       {
-        connection: {
-          host,
-          port,
-        },
+        connection,
         concurrency: 2,
       },
     );
@@ -93,7 +107,7 @@ export class DeploymentProcessorService
   }
 
   async onModuleDestroy(): Promise<void> {
-    await this.worker?.close();
+    await Promise.all([this.worker?.close(), this.diagnosisQueue?.close()]);
   }
 
   private async processJob(
@@ -633,6 +647,58 @@ export class DeploymentProcessorService
     }
   }
 
+  private async queueAutomaticDiagnosis(deploymentId: string): Promise<void> {
+    if (!this.diagnosisQueue) {
+      this.logger.error(
+        `Could not queue diagnosis for ${deploymentId}: diagnosis queue is not initialized`,
+      );
+
+      return;
+    }
+
+    try {
+      await this.diagnosisQueue.add(
+        AUTOMATIC_DIAGNOSIS_JOB_NAME,
+        {
+          deploymentId,
+        },
+        {
+          jobId: `automatic-diagnosis-${deploymentId}`,
+          attempts: 3,
+          backoff: {
+            type: "exponential",
+            delay: 5_000,
+          },
+          removeOnComplete: {
+            age: 3_600,
+            count: 500,
+          },
+          removeOnFail: {
+            age: 86_400,
+            count: 1_000,
+          },
+        },
+      );
+
+      this.logger.log(
+        `Automatic diagnosis queued for deployment ${deploymentId}`,
+      );
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Unknown diagnosis queue error";
+
+      /*
+       * AI queue failure must never replace or hide the real deployment
+       * failure.
+       */
+      this.logger.error(
+        `Could not queue automatic diagnosis for deployment ${deploymentId}: ${message}`,
+      );
+    }
+  }
+
   private async markDeploymentAsFailed(
     deploymentId: string,
     message: string,
@@ -663,5 +729,7 @@ export class DeploymentProcessorService
     this.logger.error(
       `Deployment ${deploymentId} changed to FAILED: ${message}`,
     );
+
+    await this.queueAutomaticDiagnosis(deploymentId);
   }
 }
