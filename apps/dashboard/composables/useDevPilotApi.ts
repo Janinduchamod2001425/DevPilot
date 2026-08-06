@@ -123,6 +123,21 @@ export function useDevPilotApi() {
     });
   }
 
+  function deleteDeployment(deploymentId: string) {
+    return api<{ message: string; jobId?: string }>(
+      `/deployments/${deploymentId}`,
+      {
+        method: "DELETE",
+      },
+    );
+  }
+
+  function deleteProject(projectId: string) {
+    return api<{ message: string; jobId?: string }>(`/projects/${projectId}`, {
+      method: "DELETE",
+    });
+  }
+
   function getCurrentUser(): Promise<AuthResponse> {
     return api<AuthResponse>("/auth/me");
   }
@@ -242,5 +257,7 @@ export function useDevPilotApi() {
     getGitHubRepositories,
     getRepositoryRootDirectories,
     importProject,
+    deleteDeployment,
+    deleteProject,
   };
 }
