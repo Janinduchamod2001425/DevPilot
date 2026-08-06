@@ -14,6 +14,15 @@ import { PrismaService } from "../database/prisma.service.js";
 import { DeploymentQueueService } from "../deployment-queue/deployment-queue.service.js";
 import { CreateDeploymentDto } from "./dto/create-deployment.dto.js";
 
+const ACTIVE_DEPLOYMENT_STATUSES: DeploymentStatus[] = [
+  DeploymentStatus.QUEUED,
+  DeploymentStatus.CLONING,
+  DeploymentStatus.ANALYZING,
+  DeploymentStatus.BUILDING,
+  DeploymentStatus.STARTING,
+  DeploymentStatus.HEALTH_CHECKING,
+];
+
 @Injectable()
 export class DeploymentsService {
   constructor(
@@ -319,6 +328,40 @@ export class DeploymentsService {
 
     // Return the deployment only after rechecking its ownership.
     return this.findOne(userId, id);
+  }
+
+  async remove(
+    userId: string,
+    id: string,
+  ): Promise<{ queued: true; jobId: string }> {
+    const deployment = await this.requireOwnedDeployment(userId, id);
+
+    if (ACTIVE_DEPLOYMENT_STATUSES.includes(deployment.status)) {
+      throw new ConflictException(
+        `Deployment cannot be deleted while ${deployment.status}`,
+      );
+    }
+
+    try {
+      const jobId = await this.deploymentQueueService.addDeleteDeployment({
+        deploymentId: deployment.id,
+        artifacts: [
+          {
+            deploymentId: deployment.id,
+            containerId: deployment.containerId,
+            imageTag: deployment.imageTag,
+          },
+        ],
+        requestedAt: new Date().toISOString(),
+      });
+
+      return { queued: true, jobId };
+    } catch (error: unknown) {
+      throw new ServiceUnavailableException(
+        "The deployment deletion request could not be queued",
+        { cause: error },
+      );
+    }
   }
 
   /**
