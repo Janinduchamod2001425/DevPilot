@@ -176,7 +176,7 @@ onMounted(() => {
 
 <template>
   <main class="px-6 py-10">
-    <div class="mx-auto max-w-4xl">
+    <div class="mx-auto max-w-7xl">
       <NuxtLink
         class="inline-flex items-center gap-2 text-sm text-slate-400 transition hover:text-white"
         to="/new"
