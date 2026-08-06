@@ -8,6 +8,7 @@ import {
   Post,
   Req,
   UseGuards,
+  Delete,
 } from "@nestjs/common";
 import type {
   AiDiagnosis,
@@ -93,5 +94,14 @@ export class DeploymentsController {
     @Req() request: AuthenticatedRequest,
   ): Promise<Deployment> {
     return this.deploymentsService.restart(request.user.id, id);
+  }
+
+  @Delete(":id")
+  @HttpCode(HttpStatus.ACCEPTED)
+  remove(
+    @Param("id") id: string,
+    @Req() request: AuthenticatedRequest,
+  ): Promise<{ queued: true; jobId: string }> {
+    return this.deploymentsService.remove(request.user.id, id);
   }
 }
