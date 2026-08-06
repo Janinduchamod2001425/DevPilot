@@ -7,6 +7,9 @@ import type {
 } from "~/types/api";
 import { useAppToast } from "~/composables/useAppToast";
 
+useHead({
+  title: "New Project",
+});
 type VisibilityFilter = "all" | "public" | "private";
 
 const api = useDevPilotApi();
@@ -202,7 +205,7 @@ onMounted(() => {
 
 <template>
   <main class="px-6 py-10">
-    <div class="mx-auto max-w-6xl">
+    <div class="mx-auto max-w-7xl">
       <section
         class="flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between"
       >
