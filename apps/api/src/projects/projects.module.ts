@@ -5,9 +5,16 @@ import { GitHubModule } from "../github/github.module.js";
 import { ProjectsController } from "./projects.controller.js";
 import { ProjectsService } from "./projects.service.js";
 import { DeploymentsModule } from "../deployments/deployments.module.js";
+import { DeploymentQueueModule } from "../deployment-queue/deployment-queue.module.js";
 
 @Module({
-  imports: [DatabaseModule, AuthModule, GitHubModule, DeploymentsModule],
+  imports: [
+    DatabaseModule,
+    AuthModule,
+    GitHubModule,
+    DeploymentsModule,
+    DeploymentQueueModule,
+  ],
   controllers: [ProjectsController],
   providers: [ProjectsService],
   exports: [ProjectsService],
