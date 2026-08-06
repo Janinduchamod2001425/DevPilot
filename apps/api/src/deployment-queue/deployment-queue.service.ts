@@ -5,6 +5,10 @@ import {
   DEPLOYMENT_QUEUE_NAME,
   RESTART_DEPLOYMENT_JOB_NAME,
   STOP_DEPLOYMENT_JOB_NAME,
+  DELETE_DEPLOYMENT_JOB_NAME,
+  DELETE_PROJECT_JOB_NAME,
+  type DeleteDeploymentJobData,
+  type DeleteProjectJobData,
   type DeploymentJobData,
   type DeploymentJobName,
   type DeploymentJobResult,
@@ -78,5 +82,23 @@ export class DeploymentQueueService implements OnModuleDestroy {
 
   async onModuleDestroy(): Promise<void> {
     await this.queue.close();
+  }
+
+  async addDeleteDeployment(data: DeleteDeploymentJobData): Promise<string> {
+    const job = await this.queue.add(DELETE_DEPLOYMENT_JOB_NAME, data, {
+      jobId: `delete-deployment-${data.deploymentId}`,
+    });
+
+    if (!job.id) throw new Error("BullMQ did not return a job identifier");
+    return job.id;
+  }
+
+  async addDeleteProject(data: DeleteProjectJobData): Promise<string> {
+    const job = await this.queue.add(DELETE_PROJECT_JOB_NAME, data, {
+      jobId: `delete-project-${data.projectId}`,
+    });
+
+    if (!job.id) throw new Error("BullMQ did not return a job identifier");
+    return job.id;
   }
 }
