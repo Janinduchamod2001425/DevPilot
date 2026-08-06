@@ -3,11 +3,14 @@ import {
   ConflictException,
   Injectable,
   NotFoundException,
+  ServiceUnavailableException,
 } from "@nestjs/common";
 import { PrismaService } from "../database/prisma.service.js";
 import { GitHubService } from "../github/github.service.js";
 import type { ImportProjectDto } from "./dto/import-project.dto.js";
 import { DeploymentsService } from "../deployments/deployments.service.js";
+import { DeploymentQueueService } from "../deployment-queue/deployment-queue.service.js";
+import { DeploymentStatus } from "@devpilot/database";
 
 @Injectable()
 export class ProjectsService {
@@ -15,6 +18,7 @@ export class ProjectsService {
     private readonly prismaService: PrismaService,
     private readonly githubService: GitHubService,
     private readonly deploymentService: DeploymentsService,
+    private readonly deploymentQueueService: DeploymentQueueService,
   ) {}
 
   async importProject(userId: string, dto: ImportProjectDto) {
@@ -408,6 +412,66 @@ export class ProjectsService {
         updatedAt: true,
       },
     });
+  }
+
+  async remove(
+    userId: string,
+    projectId: string,
+  ): Promise<{ queued: true; jobId: string }> {
+    const project = await this.prismaService.client.project.findFirst({
+      where: { id: projectId, userId },
+      include: {
+        deployments: {
+          select: {
+            id: true,
+            status: true,
+            containerId: true,
+            imageTag: true,
+          },
+        },
+      },
+    });
+
+    if (!project)
+      throw new NotFoundException(`Project ${projectId} was not found`);
+
+    const activeStatuses: DeploymentStatus[] = [
+      DeploymentStatus.QUEUED,
+      DeploymentStatus.CLONING,
+      DeploymentStatus.ANALYZING,
+      DeploymentStatus.BUILDING,
+      DeploymentStatus.STARTING,
+      DeploymentStatus.HEALTH_CHECKING,
+    ];
+
+    const active = project.deployments.find((item) =>
+      activeStatuses.includes(item.status),
+    );
+
+    if (active) {
+      throw new ConflictException(
+        `Project cannot be deleted while deployment ${active.id} is ${active.status}`,
+      );
+    }
+
+    try {
+      const jobId = await this.deploymentQueueService.addDeleteProject({
+        projectId,
+        artifacts: project.deployments.map((item) => ({
+          deploymentId: item.id,
+          containerId: item.containerId,
+          imageTag: item.imageTag,
+        })),
+        requestedAt: new Date().toISOString(),
+      });
+
+      return { queued: true, jobId };
+    } catch (error: unknown) {
+      throw new ServiceUnavailableException(
+        "The project deletion request could not be queued",
+        { cause: error },
+      );
+    }
   }
 
   private normalizeRootDirectory(rootDirectory: string): string {
