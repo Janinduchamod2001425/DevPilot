@@ -33,94 +33,71 @@ async function handleLogout() {
 </script>
 
 <template>
-  <header
-    class="fixed top-0 left-0 z-50 w-full border-b border-slate-800/80 bg-slate-950/90 backdrop-blur-md"
-  >
-    <div class="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
+  <header class="nav-header">
+    <div class="nav-bar">
       <!-- Logo -->
-      <NuxtLink class="flex items-center gap-3" to="/">
-        <div
-          class="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-cyan-400 to-blue-500 font-black text-slate-950 shadow-lg shadow-cyan-500/20"
-        >
-          D
-        </div>
-        <div class="hidden sm:block">
-          <p class="text-lg font-bold text-white">DevPilot</p>
-          <p class="text-xs text-slate-500">Self‑hosted deployments</p>
+      <NuxtLink aria-label="Go to DevPilot dashboard" class="nav-brand" to="/">
+        <span class="nav-logo-ring">
+          <img
+            :src="'/images/devpilot-logo-transparent.png'"
+            alt="DevPilot logo"
+            class="nav-logo-img"
+          />
+        </span>
+
+        <div class="nav-brand-copy">
+          <p class="nav-brand-name">DevPilot</p>
+          <p class="nav-brand-sub">Self-hosted deployments</p>
         </div>
       </NuxtLink>
 
       <!-- Desktop Right Side -->
-      <div class="hidden md:flex items-center gap-4">
-        <div
-          v-if="loading || !initialized"
-          class="flex items-center gap-3 text-sm text-slate-400"
-        >
-          <span
-            class="h-5 w-5 animate-spin rounded-full border-2 border-slate-700 border-t-cyan-400"
-          />
+      <div class="nav-desktop">
+        <div v-if="loading || !initialized" class="nav-loading">
+          <span class="nav-spinner" />
           Loading…
         </div>
         <template v-else-if="user">
-          <div class="flex items-center gap-3">
+          <div class="nav-user">
             <img
               v-if="user.avatarUrl"
               :alt="userDisplayName"
               :src="user.avatarUrl"
-              class="h-10 w-10 rounded-full border border-slate-700 object-cover"
+              class="nav-avatar"
             />
-            <div
-              v-else
-              class="flex h-10 w-10 items-center justify-center rounded-full bg-cyan-400 font-bold text-slate-950"
-            >
+            <div v-else class="nav-avatar-fallback">
               {{ userInitial }}
             </div>
-            <div class="max-w-40 hidden lg:block">
-              <p class="truncate text-sm font-semibold text-white">
-                {{ userDisplayName }}
-              </p>
-              <p class="truncate text-xs text-slate-500">
-                @{{ user.username }}
-              </p>
+            <div class="nav-user-copy">
+              <p class="nav-user-name">{{ userDisplayName }}</p>
+              <p class="nav-user-handle">@{{ user.username }}</p>
             </div>
           </div>
-          <div
-            class="hidden lg:block rounded-full border border-slate-800 bg-slate-900/80 px-3 py-1 text-xs text-slate-400 backdrop-blur"
-          >
-            Local
-          </div>
+
           <button
             :disabled="isLoggingOut"
-            class="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900/60 px-4 py-2 text-sm font-medium text-slate-300 transition hover:border-red-500/40 hover:bg-red-500/10 hover:text-red-300 disabled:opacity-60"
+            class="nav-logout"
+            type="button"
             @click="handleLogout"
           >
-            <Icon v-if="!isLoggingOut" class="h-4 w-4" icon="mdi:logout" />
-            <span
-              v-else
-              class="h-4 w-4 animate-spin rounded-full border-2 border-slate-500 border-t-white"
-            />
-            <span class="hidden sm:inline">{{
+            <Icon v-if="!isLoggingOut" class="nav-icon" icon="mdi:logout" />
+            <span v-else class="nav-spinner nav-spinner-light" />
+            <span class="nav-logout-label">{{
               isLoggingOut ? "Logging out…" : "Logout"
             }}</span>
           </button>
         </template>
-        <NuxtLink
-          v-else
-          class="rounded-lg bg-cyan-400 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-cyan-300"
-          to="/login"
-        >
-          Sign in
-        </NuxtLink>
       </div>
 
       <!-- Mobile Hamburger -->
       <button
         aria-label="Toggle menu"
-        class="md:hidden flex items-center justify-center rounded-lg p-2 text-slate-400 hover:bg-slate-800 hover:text-white transition"
+        class="nav-hamburger"
+        type="button"
         @click="mobileMenuOpen = !mobileMenuOpen"
       >
-        <Icon v-if="!mobileMenuOpen" class="h-6 w-6" icon="mdi:menu" />
-        <Icon v-else class="h-6 w-6" icon="mdi:close" />
+        <Icon v-if="!mobileMenuOpen" class="nav-icon-lg" icon="mdi:menu" />
+        <Icon v-else class="nav-icon-lg" icon="mdi:close" />
       </button>
     </div>
 
@@ -131,64 +108,369 @@ async function handleLogout() {
       :enter="{ opacity: 1, y: 0 }"
       :initial="{ opacity: 0, y: -20 }"
       :leave="{ opacity: 0, y: -20 }"
-      class="md:hidden absolute left-0 top-full w-full border-b border-slate-800 bg-slate-950/95 backdrop-blur-lg px-6 py-5 shadow-2xl"
+      class="nav-mobile-menu"
     >
-      <div
-        v-if="loading || !initialized"
-        class="flex items-center gap-3 text-sm text-slate-400"
-      >
-        <span
-          class="h-5 w-5 animate-spin rounded-full border-2 border-slate-700 border-t-cyan-400"
-        />
+      <div v-if="loading || !initialized" class="nav-loading">
+        <span class="nav-spinner" />
         Loading…
       </div>
       <template v-else-if="user">
-        <div class="flex items-center gap-4">
+        <div class="nav-mobile-user">
           <img
             v-if="user.avatarUrl"
             :alt="userDisplayName"
             :src="user.avatarUrl"
-            class="h-12 w-12 rounded-full border border-slate-700 object-cover"
+            class="nav-avatar nav-avatar-lg"
           />
-          <div
-            v-else
-            class="flex h-12 w-12 items-center justify-center rounded-full bg-cyan-400 text-xl font-bold text-slate-950"
-          >
+          <div v-else class="nav-avatar-fallback nav-avatar-fallback-lg">
             {{ userInitial }}
           </div>
           <div>
-            <p class="text-base font-semibold text-white">
-              {{ userDisplayName }}
-            </p>
-            <p class="text-sm text-slate-500">@{{ user.username }}</p>
+            <p class="nav-mobile-name">{{ userDisplayName }}</p>
+            <p class="nav-mobile-handle">@{{ user.username }}</p>
           </div>
         </div>
-        <div class="mt-4 flex items-center gap-3">
-          <span
-            class="rounded-full border border-slate-800 bg-slate-900/80 px-3 py-1 text-xs text-slate-400"
-            >Local</span
-          >
+        <div class="nav-mobile-actions">
           <button
             :disabled="isLoggingOut"
-            class="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900/60 px-4 py-2 text-sm font-medium text-slate-300 transition hover:border-red-500/40 hover:bg-red-500/10 hover:text-red-300 disabled:opacity-60"
+            class="nav-logout nav-logout-block"
+            type="button"
             @click="handleLogout"
           >
-            <Icon v-if="!isLoggingOut" class="h-4 w-4" icon="mdi:logout" />
-            <span
-              v-else
-              class="h-4 w-4 animate-spin rounded-full border-2 border-slate-500 border-t-white"
-            />
+            <Icon v-if="!isLoggingOut" class="nav-icon" icon="mdi:logout" />
+            <span v-else class="nav-spinner nav-spinner-light" />
             {{ isLoggingOut ? "Logging out…" : "Logout" }}
           </button>
         </div>
       </template>
-      <NuxtLink
-        v-else
-        class="block rounded-lg bg-cyan-400 px-4 py-2 text-center text-sm font-semibold text-slate-950 transition hover:bg-cyan-300"
-        to="/login"
-      >
-        Sign in
-      </NuxtLink>
     </div>
   </header>
 </template>
+
+<style scoped>
+.nav-header {
+  --bg: #020617;
+  --surface: rgba(15, 23, 42, 0.7);
+  --surface-2: rgba(30, 41, 59, 0.75);
+  --border: #1e293b;
+  --border-hover: #334155;
+  --text: #e2e8f0;
+  --text-dim: #94a3b8;
+  --text-faint: #64748b;
+  --accent: #22d3ee;
+  --accent-dim: rgba(34, 211, 238, 0.14);
+  --bad: #fb7185;
+  --bad-dim: rgba(251, 113, 133, 0.12);
+
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 50;
+  width: 100%;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(
+    180deg,
+    rgba(2, 6, 23, 0.92),
+    rgba(2, 6, 23, 0.82)
+  );
+  backdrop-filter: blur(14px);
+  box-shadow: 0 1px 0 rgba(34, 211, 238, 0.08);
+  font-family:
+    "Inter",
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+}
+
+.nav-bar {
+  margin: 0 auto;
+  display: flex;
+  max-width: 84rem;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.9rem 1.5rem;
+}
+
+/* Brand */
+.nav-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.nav-logo-ring {
+  display: inline-flex;
+  border-radius: 12px;
+  padding: 2px;
+  background: linear-gradient(
+    135deg,
+    rgba(34, 211, 238, 0.6),
+    rgba(59, 130, 246, 0.15)
+  );
+  box-shadow: 0 0 20px -4px rgba(34, 211, 238, 0.45);
+}
+
+.nav-logo-img {
+  height: 2.5rem;
+  width: 2.5rem;
+  border-radius: 10px;
+  object-fit: contain;
+  background: var(--bg);
+  display: block;
+}
+
+.nav-brand-copy {
+  display: none;
+}
+
+@media (min-width: 640px) {
+  .nav-brand-copy {
+    display: block;
+  }
+}
+
+.nav-brand-name {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #ffffff;
+  letter-spacing: -0.01em;
+}
+
+.nav-brand-sub {
+  margin-top: -2px;
+  font-size: 0.72rem;
+  color: var(--text-faint);
+}
+
+/* Desktop right side */
+.nav-desktop {
+  display: none;
+  align-items: center;
+  gap: 1rem;
+}
+
+@media (min-width: 768px) {
+  .nav-desktop {
+    display: flex;
+  }
+}
+
+.nav-loading {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 0.85rem;
+  color: var(--text-dim);
+}
+
+.nav-spinner {
+  height: 1.1rem;
+  width: 1.1rem;
+  border-radius: 999px;
+  border: 2px solid rgba(34, 211, 238, 0.25);
+  border-top-color: var(--accent);
+  animation: nav-spin 0.7s linear infinite;
+}
+
+.nav-spinner-light {
+  border: 2px solid rgba(255, 255, 255, 0.25);
+  border-top-color: #ffffff;
+  height: 1rem;
+  width: 1rem;
+}
+
+@keyframes nav-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.nav-user {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.nav-avatar {
+  height: 2.35rem;
+  width: 2.35rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  object-fit: cover;
+}
+
+.nav-avatar-fallback {
+  display: flex;
+  height: 2.35rem;
+  width: 2.35rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #04121a;
+  font-weight: 700;
+  box-shadow:
+    0 0 0 1px rgba(34, 211, 238, 0.4),
+    0 0 16px -2px rgba(34, 211, 238, 0.5);
+}
+
+.nav-user-copy {
+  display: none;
+  max-width: 10rem;
+}
+
+@media (min-width: 1024px) {
+  .nav-user-copy {
+    display: block;
+  }
+}
+
+.nav-user-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #ffffff;
+}
+
+.nav-user-handle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.75rem;
+  color: var(--text-faint);
+}
+
+.nav-logout {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  padding: 0.55rem 1rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text-dim);
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease,
+    color 0.15s ease;
+}
+
+.nav-logout:hover:not(:disabled) {
+  border-color: rgba(251, 113, 133, 0.4);
+  background: var(--bad-dim);
+  color: #fca5b1;
+}
+
+.nav-logout:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.nav-logout-label {
+  display: none;
+}
+
+@media (min-width: 640px) {
+  .nav-logout-label {
+    display: inline;
+  }
+}
+
+.nav-icon {
+  height: 1rem;
+  width: 1rem;
+}
+
+.nav-icon-lg {
+  height: 1.5rem;
+  width: 1.5rem;
+}
+
+/* Hamburger */
+.nav-hamburger {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  padding: 0.5rem;
+  color: var(--text-dim);
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
+}
+
+.nav-hamburger:hover {
+  background: var(--surface-2);
+  color: var(--accent);
+}
+
+@media (min-width: 768px) {
+  .nav-hamburger {
+    display: none;
+  }
+}
+
+/* Mobile menu */
+.nav-mobile-menu {
+  position: absolute;
+  left: 0;
+  top: 100%;
+  width: 100%;
+  border-bottom: 1px solid var(--border);
+  background: rgba(2, 6, 23, 0.97);
+  backdrop-filter: blur(16px);
+  padding: 1.25rem 1.5rem;
+  box-shadow: 0 20px 40px -20px rgba(0, 0, 0, 0.6);
+}
+
+@media (min-width: 768px) {
+  .nav-mobile-menu {
+    display: none;
+  }
+}
+
+.nav-mobile-user {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.nav-avatar-lg {
+  height: 3rem;
+  width: 3rem;
+}
+
+.nav-avatar-fallback-lg {
+  height: 3rem;
+  width: 3rem;
+  font-size: 1.2rem;
+}
+
+.nav-mobile-name {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #ffffff;
+}
+
+.nav-mobile-handle {
+  font-size: 0.85rem;
+  color: var(--text-faint);
+}
+
+.nav-mobile-actions {
+  margin-top: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.nav-logout-block {
+  width: 100%;
+  justify-content: center;
+}
+</style>
