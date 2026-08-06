@@ -1,9 +1,12 @@
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
+import { promisify } from "node:util";
 import { createInterface } from "node:readline";
 import { Injectable, Logger } from "@nestjs/common";
 import { DeploymentLogLevel, DeploymentStatus } from "@devpilot/database";
 import { PrismaService } from "../database/prisma.service.js";
 import type { DockerfileResult } from "./dockerfile.service.js";
+
+const execFileAsync = promisify(execFile);
 
 export type DockerBuildResult = {
   imageTag: string;
@@ -83,6 +86,31 @@ export class DockerBuildService {
       throw new Error(`Docker image build failed: ${message}`, {
         cause: error,
       });
+    }
+  }
+
+  async removeImageIfPresent(imageTag: string | null): Promise<void> {
+    if (!imageTag) return;
+
+    try {
+      await execFileAsync("docker", ["image", "rm", "--force", imageTag], {
+        encoding: "utf8",
+        timeout: 120_000,
+        windowsHide: true,
+      });
+    } catch (error: unknown) {
+      const inspect = await execFileAsync(
+        "docker",
+        ["image", "inspect", imageTag],
+        { encoding: "utf8", timeout: 30_000, windowsHide: true },
+      )
+        .then(() => true)
+        .catch(() => false);
+
+      if (inspect) throw error;
+      this.logger.warn(
+        `Image ${imageTag} no longer exists; continuing cleanup`,
+      );
     }
   }
 
