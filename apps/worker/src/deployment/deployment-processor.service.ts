@@ -7,8 +7,12 @@ import {
 import { ConfigService } from "@nestjs/config";
 import { DeploymentLogLevel, DeploymentStatus } from "@devpilot/database";
 import {
+  DELETE_DEPLOYMENT_JOB_NAME,
+  DELETE_PROJECT_JOB_NAME,
   AUTOMATIC_DIAGNOSIS_JOB_NAME,
   DIAGNOSIS_QUEUE_NAME,
+  type DeleteProjectJobData,
+  type DeleteDeploymentJobData,
   type AutomaticDiagnosisJobData,
   DEPLOYMENT_JOB_NAME,
   DEPLOYMENT_QUEUE_NAME,
@@ -139,6 +143,26 @@ export class DeploymentProcessorService
           RestartDeploymentJobData,
           DeploymentJobResult,
           typeof RESTART_DEPLOYMENT_JOB_NAME
+        >,
+      );
+    }
+
+    if (job.name === DELETE_DEPLOYMENT_JOB_NAME) {
+      return this.processDeleteDeployment(
+        job as Job<
+          DeleteDeploymentJobData,
+          DeploymentJobResult,
+          typeof DELETE_DEPLOYMENT_JOB_NAME
+        >,
+      );
+    }
+
+    if (job.name === DELETE_PROJECT_JOB_NAME) {
+      return this.processDeleteProject(
+        job as Job<
+          DeleteProjectJobData,
+          DeploymentJobResult,
+          typeof DELETE_PROJECT_JOB_NAME
         >,
       );
     }
@@ -731,5 +755,52 @@ export class DeploymentProcessorService
     );
 
     await this.queueAutomaticDiagnosis(deploymentId);
+  }
+
+  private async cleanupArtifacts(
+    artifacts: DeleteDeploymentJobData["artifacts"],
+  ): Promise<void> {
+    for (const artifact of artifacts) {
+      await this.dockerContainerService.removeIfPresent(artifact.containerId);
+      await this.dockerBuildService.removeImageIfPresent(artifact.imageTag);
+    }
+  }
+
+  private async processDeleteDeployment(
+    job: Job<
+      DeleteDeploymentJobData,
+      DeploymentJobResult,
+      typeof DELETE_DEPLOYMENT_JOB_NAME
+    >,
+  ): Promise<DeploymentJobResult> {
+    await this.cleanupArtifacts(job.data.artifacts);
+    await this.prismaService.client.deployment.deleteMany({
+      where: { id: job.data.deploymentId },
+    });
+
+    return {
+      success: true,
+      message: `Deployment ${job.data.deploymentId} deleted`,
+      processedAt: new Date().toISOString(),
+    };
+  }
+
+  private async processDeleteProject(
+    job: Job<
+      DeleteProjectJobData,
+      DeploymentJobResult,
+      typeof DELETE_PROJECT_JOB_NAME
+    >,
+  ): Promise<DeploymentJobResult> {
+    await this.cleanupArtifacts(job.data.artifacts);
+    await this.prismaService.client.project.deleteMany({
+      where: { id: job.data.projectId },
+    });
+
+    return {
+      success: true,
+      message: `Project ${job.data.projectId} deleted`,
+      processedAt: new Date().toISOString(),
+    };
   }
 }
