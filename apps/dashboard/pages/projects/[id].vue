@@ -9,6 +9,9 @@ import type {
 } from "~/types/api";
 import { Icon } from "@iconify/vue";
 import { useAppToast } from "~/composables/useAppToast";
+useHead({
+  title: "Project Details",
+});
 
 type AiDiagnosisStatus = "PENDING" | "COMPLETED" | "FAILED";
 
@@ -63,6 +66,10 @@ const diagnosisLoading = ref(false);
 const diagnosisGenerating = ref(false);
 const diagnosisErrorMessage = ref("");
 const diagnosisCheckedDeploymentId = ref<string | null>(null);
+
+const deploymentPendingDelete = ref<Deployment | null>(null);
+const projectDeleteOpen = ref(false);
+const deleting = ref(false);
 
 let pollingTimer: ReturnType<typeof setInterval> | null = null;
 let logPollingTimer: ReturnType<typeof setInterval> | null = null;
@@ -176,6 +183,71 @@ function diagnosisRequest(
     method,
     credentials: "include",
   });
+}
+
+function getApiError(error: unknown, fallback: string): string {
+  if (typeof error !== "object" || error === null) return fallback;
+  const value = error as { data?: { message?: unknown }; message?: unknown };
+  if (typeof value.data?.message === "string") return value.data.message;
+  if (typeof value.message === "string") return value.message;
+  return fallback;
+}
+
+async function deleteDeployment(): Promise<void> {
+  const target = deploymentPendingDelete.value;
+
+  if (!target || deleting.value) return;
+
+  deleting.value = true;
+
+  try {
+    await api.deleteDeployment(target.id);
+
+    deploymentPendingDelete.value = null;
+
+    if (selectedDeploymentId.value === target.id) {
+      selectedDeploymentId.value = null;
+      deploymentLogs.value = [];
+      resetDiagnosis();
+    }
+
+    toast.success("Deletion queued", "Docker resources are being cleaned up.");
+
+    window.setTimeout(() => void loadProject(false), 1000);
+    window.setTimeout(() => void loadProject(false), 3000);
+  } catch (error: unknown) {
+    toast.error(
+      "Could not delete deployment",
+      getApiError(error, "Please try again."),
+    );
+  } finally {
+    deleting.value = false;
+  }
+}
+
+async function deleteProject(): Promise<void> {
+  if (deleting.value) return;
+
+  deleting.value = true;
+
+  try {
+    await api.deleteProject(projectId.value);
+
+    toast.success(
+      "Project deletion queued",
+      "Docker resources are being cleaned up.",
+    );
+
+    projectDeleteOpen.value = false;
+    await navigateTo("/");
+  } catch (error: unknown) {
+    toast.error(
+      "Could not delete project",
+      getApiError(error, "Please try again."),
+    );
+  } finally {
+    deleting.value = false;
+  }
 }
 
 async function loadProject(
@@ -900,6 +972,15 @@ onBeforeUnmount(() => {
                 Settings
               </button>
               <button
+                :disabled="deleting || isDeploymentActive"
+                class="flex items-center gap-2 rounded-xl border border-rose-500/40 bg-rose-500/10 px-4 py-2.5 text-sm font-semibold text-rose-300 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+                type="button"
+                @click="projectDeleteOpen = true"
+              >
+                <Icon class="h-4 w-4" icon="mdi:trash-can-outline" />
+                Delete project
+              </button>
+              <button
                 :disabled="refreshing || actionLoading !== null"
                 class="flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-900 px-4 py-2.5 text-sm font-semibold transition hover:border-slate-500 disabled:opacity-50"
                 @click="loadProject(false, true)"
@@ -1448,6 +1529,22 @@ onBeforeUnmount(() => {
                 </div>
                 <div class="flex shrink-0 items-center gap-4">
                   <button
+                    v-if="
+                      [
+                        'READY',
+                        'FAILED',
+                        'CANCELLED',
+                        'STOPPED',
+                        'ROLLED_BACK',
+                      ].includes(deployment.status)
+                    "
+                    class="rounded-lg border border-rose-500/30 px-3 py-2 text-sm font-semibold text-rose-300 transition hover:bg-rose-500/10"
+                    type="button"
+                    @click.stop="deploymentPendingDelete = deployment"
+                  >
+                    Delete
+                  </button>
+                  <button
                     class="text-sm font-semibold text-slate-400 transition hover:text-cyan-300"
                     @click.stop="selectDeployment(deployment.id)"
                   >
@@ -1471,6 +1568,108 @@ onBeforeUnmount(() => {
         </section>
       </template>
     </div>
+
+    <Teleport to="body">
+      <div
+        v-if="deploymentPendingDelete"
+        class="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm"
+        @click.self="!deleting && (deploymentPendingDelete = null)"
+      >
+        <section
+          class="w-full max-w-md rounded-2xl border border-rose-500/30 bg-slate-900 p-6 shadow-2xl"
+        >
+          <div
+            class="flex h-12 w-12 items-center justify-center rounded-full bg-rose-500/10 text-rose-300"
+          >
+            <Icon class="h-6 w-6" icon="mdi:trash-can-outline" />
+          </div>
+
+          <h2 class="mt-5 text-xl font-bold text-white">Delete deployment?</h2>
+
+          <p class="mt-3 text-sm leading-6 text-slate-400">
+            This will remove the Docker container, Docker image, deployment
+            logs, analysis, AI diagnosis, and deployment record.
+          </p>
+
+          <p class="mt-3 break-all font-mono text-xs text-slate-500">
+            {{ deploymentPendingDelete.id }}
+          </p>
+
+          <div class="mt-6 flex justify-end gap-3">
+            <button
+              :disabled="deleting"
+              class="rounded-xl border border-slate-700 px-4 py-2.5 text-sm font-semibold text-slate-300 hover:border-slate-500 disabled:opacity-50"
+              type="button"
+              @click="deploymentPendingDelete = null"
+            >
+              Cancel
+            </button>
+
+            <button
+              :disabled="deleting"
+              class="rounded-xl bg-rose-500 px-4 py-2.5 text-sm font-bold text-white hover:bg-rose-400 disabled:cursor-not-allowed disabled:opacity-50"
+              type="button"
+              @click="deleteDeployment"
+            >
+              {{ deleting ? "Deleting…" : "Delete deployment" }}
+            </button>
+          </div>
+        </section>
+      </div>
+    </Teleport>
+
+    <Teleport to="body">
+      <div
+        v-if="projectDeleteOpen"
+        class="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm"
+        @click.self="!deleting && (projectDeleteOpen = false)"
+      >
+        <section
+          class="w-full max-w-md rounded-2xl border border-rose-500/30 bg-slate-900 p-6 shadow-2xl"
+        >
+          <div
+            class="flex h-12 w-12 items-center justify-center rounded-full bg-rose-500/10 text-rose-300"
+          >
+            <Icon class="h-6 w-6" icon="mdi:folder-remove-outline" />
+          </div>
+
+          <h2 class="mt-5 text-xl font-bold text-white">
+            Delete {{ project?.name }}?
+          </h2>
+
+          <p class="mt-3 text-sm leading-6 text-slate-400">
+            This permanently deletes the project and all its deployments.
+            Related Docker containers, images, logs, analyses, and AI diagnoses
+            will also be removed.
+          </p>
+
+          <p class="mt-3 text-sm font-semibold text-rose-300">
+            This action cannot be undone.
+          </p>
+
+          <div class="mt-6 flex justify-end gap-3">
+            <button
+              :disabled="deleting"
+              class="rounded-xl border border-slate-700 px-4 py-2.5 text-sm font-semibold text-slate-300 hover:border-slate-500 disabled:opacity-50"
+              type="button"
+              @click="projectDeleteOpen = false"
+            >
+              Cancel
+            </button>
+
+            <button
+              :disabled="deleting"
+              class="rounded-xl bg-rose-500 px-4 py-2.5 text-sm font-bold text-white hover:bg-rose-400 disabled:cursor-not-allowed disabled:opacity-50"
+              type="button"
+              @click="deleteProject"
+            >
+              {{ deleting ? "Deleting…" : "Delete project" }}
+            </button>
+          </div>
+        </section>
+      </div>
+    </Teleport>
+
     <Teleport to="body">
       <div
         v-if="settingsOpen"
@@ -1488,7 +1687,7 @@ onBeforeUnmount(() => {
                 Project settings
               </p>
 
-              <h2 class="mt-2 text-2xl font-bold">Root directory</h2>
+              <h2 class="mt-2 text-2xl font-bold text-white">Root directory</h2>
 
               <p class="mt-2 text-sm text-slate-400">
                 Choose the directory containing the application that DevPilot
@@ -1604,7 +1803,7 @@ onBeforeUnmount(() => {
             >
               <button
                 :disabled="settingsSaving"
-                class="rounded-xl border border-slate-700 px-5 py-2.5 text-sm font-semibold transition hover:border-slate-500 disabled:opacity-50"
+                class="rounded-xl border border-slate-700 px-5 py-2.5 text-sm font-semibold transition hover:border-slate-500 disabled:opacity-50 text-white"
                 type="button"
                 @click="closeSettings"
               >
@@ -1626,7 +1825,7 @@ onBeforeUnmount(() => {
                 type="button"
                 @click="saveRootDirectory(true)"
               >
-                {{ settingsSaving ? "Saving..." : "Save & redeploy" }}
+                {{ settingsSaving ? "Saving..." : "Save & Redeploy" }}
               </button>
             </div>
           </div>
