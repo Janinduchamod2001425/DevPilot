@@ -1,7 +1,10 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
+  HttpCode,
+  HttpStatus,
   Param,
   Patch,
   Post,
@@ -66,5 +69,14 @@ export class ProjectsController {
       projectId,
       body.rootDirectory,
     );
+  }
+
+  @Delete(":projectId")
+  @HttpCode(HttpStatus.ACCEPTED)
+  remove(
+    @Param("projectId") projectId: string,
+    @Req() request: AuthenticatedRequest,
+  ): Promise<{ queued: true; jobId: string }> {
+    return this.projectsService.remove(request.user.id, projectId);
   }
 }
