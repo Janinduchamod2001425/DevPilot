@@ -22,10 +22,15 @@ export const DEPLOYMENT_JOB_NAME = "deploy-project";
 export const STOP_DEPLOYMENT_JOB_NAME = "stop-deployment";
 export const RESTART_DEPLOYMENT_JOB_NAME = "restart-deployment";
 
+export const DELETE_DEPLOYMENT_JOB_NAME = "delete-deployment";
+export const DELETE_PROJECT_JOB_NAME = "delete-project";
+
 export type DeploymentJobName =
   | typeof DEPLOYMENT_JOB_NAME
   | typeof STOP_DEPLOYMENT_JOB_NAME
-  | typeof RESTART_DEPLOYMENT_JOB_NAME;
+  | typeof RESTART_DEPLOYMENT_JOB_NAME
+  | typeof DELETE_DEPLOYMENT_JOB_NAME
+  | typeof DELETE_PROJECT_JOB_NAME;
 
 export type ProcessDeploymentJobData = {
   deploymentId: string;
@@ -52,10 +57,30 @@ export type RestartDeploymentJobData = {
 export type DeploymentJobData =
   | ProcessDeploymentJobData
   | StopDeploymentJobData
-  | RestartDeploymentJobData;
+  | RestartDeploymentJobData
+  | DeleteDeploymentJobData
+  | DeleteProjectJobData;
 
 export type DeploymentJobResult = {
   success: boolean;
   message: string;
   processedAt: string;
+};
+
+export type DeploymentCleanupArtifact = {
+  deploymentId: string;
+  containerId: string | null;
+  imageTag: string | null;
+};
+
+export type DeleteDeploymentJobData = {
+  deploymentId: string;
+  artifacts: DeploymentCleanupArtifact[];
+  requestedAt: string;
+};
+
+export type DeleteProjectJobData = {
+  projectId: string;
+  artifacts: DeploymentCleanupArtifact[];
+  requestedAt: string;
 };
