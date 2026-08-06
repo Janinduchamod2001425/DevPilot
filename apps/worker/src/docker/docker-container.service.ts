@@ -258,6 +258,19 @@ export class DockerContainerService {
     }
   }
 
+  async removeIfPresent(containerId: string | null): Promise<void> {
+    if (!containerId) return;
+
+    try {
+      await this.runDocker(["rm", "--force", containerId]);
+    } catch (error: unknown) {
+      if (await this.containerExists(containerId)) throw error;
+      this.logger.warn(
+        `Container ${containerId} no longer exists; continuing cleanup`,
+      );
+    }
+  }
+
   private async prepareContainerName(containerName: string): Promise<void> {
     const exists = await this.containerExists(containerName);
 
