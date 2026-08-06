@@ -2,6 +2,7 @@
 import { useAppToast } from "~/composables/useAppToast";
 import { Icon } from "@iconify/vue";
 
+useHead({ title: "Login" });
 definePageMeta({ layout: false });
 
 const route = useRoute();
@@ -74,9 +75,13 @@ async function continueWithGitHub() {
       class="w-full max-w-md rounded-3xl border border-slate-800 bg-slate-900/80 p-8 shadow-2xl backdrop-blur-sm"
     >
       <div
-        class="mb-6 flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-cyan-400 to-blue-500 text-2xl font-bold text-slate-950 shadow-lg shadow-cyan-500/20"
+        class="mb-6 flex h-14 w-14 items-center justify-center rounded-2xl text-2xl font-bold text-slate-950 shadow-lg shadow-cyan-500/20"
       >
-        D
+        <img
+          :src="'/images/devpilot-logo-transparent.png'"
+          alt="DevPilot logo"
+          class="h-10 w-10 rounded-xl object-contain shadow-lg"
+        />
       </div>
       <h1 class="text-3xl font-bold tracking-tight">Deploy with DevPilot</h1>
       <p class="mt-3 text-sm leading-6 text-slate-400">
